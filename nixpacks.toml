@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs_22", "postgresql_16", "tini"]
+nixPkgs = ["nodejs", "postgresql_16", "tini"]
 
 [phases.install]
 cmds = [
