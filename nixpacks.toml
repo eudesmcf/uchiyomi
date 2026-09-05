@@ -3,17 +3,17 @@ nixPkgs = ["nodejs_20", "postgresql_16", "tini"]
 
 [phases.install]
 cmds = [
-  "npm install --global n && \"$(npm prefix --global)/bin/n\" 20.11.1",
-  "cd /app/web && /usr/local/n/versions/node/20.11.1/bin/npm ci",
-  "cd /app/bff && /usr/local/n/versions/node/20.11.1/bin/npm ci --include=optional",
-  "cd /app/bff && /usr/local/n/versions/node/20.11.1/bin/npm install --os=linux --cpu=arm64 sharp --no-save"
+  "npm install --global n && \"$(npm prefix --global)/bin/n\" 22.14.0",
+  "cd /app/web && /usr/local/n/versions/node/22.14.0/bin/npm ci",
+  "cd /app/bff && /usr/local/n/versions/node/22.14.0/bin/npm ci --include=optional",
+  "cd /app/bff && /usr/local/n/versions/node/22.14.0/bin/npm install --include=optional --os=linux --cpu=arm64 sharp@0.35.3 --no-save --force"
 ]
 
 [phases.build]
 cmds = [
-  "cd /app/web && /usr/local/n/versions/node/20.11.1/bin/npm run build",
-  "cd /app/bff && /usr/local/n/versions/node/20.11.1/bin/npm run build"
+  "cd /app/web && /usr/local/n/versions/node/22.14.0/bin/npm run build",
+  "cd /app/bff && /usr/local/n/versions/node/22.14.0/bin/npm run build"
 ]
 
 [start]
-cmd = "/usr/local/n/versions/node/20.11.1/bin/node bff/dist/server.js"
+cmd = "/usr/local/n/versions/node/22.14.0/bin/node bff/dist/server.js"
