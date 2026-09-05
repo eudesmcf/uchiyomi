@@ -1,0 +1,90 @@
+# All-in-one: the API and the web app in a single container.
+#
+# The two-image layout (bff + an nginx serving the static export) still works and is still built; this is the
+# other option, and the one every comparable project ships. Komga serves its own Angular build from Spring,
+# Kavita from ASP.NET, Jellyfin and the *arr apps likewise. A dedicated nginx container purely for static
+# files is unusual here, and it is what produced the redirect that dropped the port on every deep link.
+#
+# What this removes: one image to build, publish, pull and update; one hop on every request; and one config
+# file whose behaviour had to be reproduced anyway.
+#
+# Postgres can be its own container, as it always was, or live inside this one: leave DATABASE_URL unset and
+# the entrypoint runs Postgres on a unix socket in /data/pg (see docker-entrypoint.sh). That is what makes
+# a one-container install possible, which is what every app store expects. Set DATABASE_URL and none of it
+# runs; nothing changes for an existing install.
+#
+#   docker build -f Dockerfile.aio -t uchiyomi:aio .
+
+# ---------- web: the static export ----------
+FROM node:22-alpine AS web
+WORKDIR /w
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
+# ---------- api: compile ----------
+FROM node:22-alpine AS api
+WORKDIR /app
+COPY bff/package.json bff/package-lock.json* ./
+RUN npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund
+COPY bff/ ./
+RUN npm run build
+
+# ---------- runtime ----------
+FROM node:22-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+
+# su-exec so the entrypoint can drop to PUID without renumbering the app user; see docker-entrypoint.sh.
+# The app's own volumes have to EXIST and be owned before the entrypoint drops privileges. Without this the
+# image runs fine until the first page is served, then fails with EACCES on mkdir /cache -- the reader shows
+# blank pages and nothing else looks wrong. The entrypoint only chowns directories that are already there.
+#
+# postgresql16-client supplies pg_dump for the built-in backup task, exactly as bff/Dockerfile installs it.
+# It was missing here from the day this file was written (v0.9.0, v0.9.1), and the backup task does not fail
+# loudly without it: spawn() reports ENOENT, but the gzip stream has already been opened, so what lands on
+# disk is a 20-byte empty archive in a directory that looks like a backup. aioParity.test.ts now holds the
+# line, because "the split image did this and the single one quietly stopped" is the whole class of bug that
+# file exists for.
+#
+# postgresql16 (the server, 14 MiB) is what embedded mode runs; the same major as the client on purpose, and
+# aioParity.test.ts checks they agree, because pg_dump from a newer major writes archives an older server
+# cannot restore. nss_wrapper (23 KB) is for the uid Postgres runs as: initdb refuses a uid with no passwd
+# entry, and a container started with `user:` has exactly that; the official postgres image uses the same
+# library for the same reason. (With PUID the entrypoint adds a real entry instead and never needs it.) /data and /run/postgresql exist and are owned up front for the same reason the other
+# volumes are: a named volume is seeded from the image directory, and a missing one becomes a root-owned
+# mountpoint the app cannot write.
+RUN apk add --no-cache su-exec tini postgresql16 postgresql16-client nss_wrapper \
+ && addgroup -g 10002 -S yomi \
+ && adduser -u 10002 -S -G yomi yomi \
+ && mkdir -p /cache /backups /config /library-dl /library /sources /data /run/postgresql \
+ && chown -R yomi:yomi /cache /backups /config /library-dl /app /data /run/postgresql
+
+COPY bff/package.json bff/package-lock.json* ./
+RUN npm ci --omit=dev --no-audit --no-fund 2>/dev/null || npm install --omit=dev --no-audit --no-fund \
+ && npm cache clean --force
+
+COPY --from=api /app/dist ./dist
+# The API reference the server serves at /api/docs. Next to dist/, where lib/apiDocs.ts resolves it.
+COPY bff/openapi.yaml ./openapi.yaml
+COPY --from=web /w/out ./web
+COPY bff/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# This is what turns the static serving on. Unset it and the same image is API-only.
+ENV WEB_ROOT=/app/web
+ENV PORT=3000
+EXPOSE 3000
+
+# No USER: the entrypoint starts as root only to drop to PUID, and refuses to run the app as root.
+# /livez, not /healthz. /healthz runs SELECT 1, which is the right answer for "should traffic be sent here"
+# and the wrong one for a container healthcheck: it makes one Postgres blip mark the whole app unhealthy,
+# where the split layout's nginx stayed up and kept serving the shell so the app could render an error.
+# In embedded mode the database is part of "alive": the entrypoint leaves a marker next to the socket, and
+# the check asks Postgres too. With an external database the marker does not exist and this is /livez alone.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD sh -c 'wget -qO- http://127.0.0.1:3000/livez >/dev/null 2>&1 || exit 1; \
+    for d in /run/postgresql /tmp/pgsock; do [ -f "$d/.embedded" ] && { pg_isready -q -h "$d" -U yomi || exit 1; }; done; exit 0'
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
+CMD ["node", "dist/server.js"]
