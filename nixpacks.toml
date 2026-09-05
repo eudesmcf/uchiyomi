@@ -1,0 +1,17 @@
+[phases.setup]
+nixPkgs = ["nodejs_22", "postgresql_16", "tini"]
+
+[phases.install]
+cmds = [
+  "cd web && npm ci",
+  "cd ../bff && npm ci"
+]
+
+[phases.build]
+cmds = [
+  "cd web && npm run build",
+  "cd ../bff && npm run build"
+]
+
+[start]
+cmd = "node bff/dist/server.js"
