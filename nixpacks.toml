@@ -3,16 +3,16 @@ nixPkgs = ["nodejs_20", "postgresql_16", "tini"]
 
 [phases.install]
 cmds = [
-  "npm install --global n && n 20.11.1",
-  "PATH=/usr/local/bin:$PATH cd /app/web && PATH=/usr/local/bin:$PATH npm ci",
-  "PATH=/usr/local/bin:$PATH cd /app/bff && PATH=/usr/local/bin:$PATH npm ci"
+  "npm install --global n && \"$(npm prefix --global)/bin/n\" 20.11.1",
+  "PATH=$(npm prefix --global)/bin:/usr/local/bin:$PATH cd /app/web && PATH=$(npm prefix --global)/bin:/usr/local/bin:$PATH npm ci",
+  "PATH=$(npm prefix --global)/bin:/usr/local/bin:$PATH cd /app/bff && PATH=$(npm prefix --global)/bin:/usr/local/bin:$PATH npm ci"
 ]
 
 [phases.build]
 cmds = [
-  "PATH=/usr/local/bin:$PATH cd /app/web && PATH=/usr/local/bin:$PATH npm run build",
-  "PATH=/usr/local/bin:$PATH cd /app/bff && PATH=/usr/local/bin:$PATH npm run build"
+  "PATH=$(npm prefix --global)/bin:/usr/local/bin:$PATH cd /app/web && PATH=$(npm prefix --global)/bin:/usr/local/bin:$PATH npm run build",
+  "PATH=$(npm prefix --global)/bin:/usr/local/bin:$PATH cd /app/bff && PATH=$(npm prefix --global)/bin:/usr/local/bin:$PATH npm run build"
 ]
 
 [start]
-cmd = "PATH=/usr/local/bin:$PATH node bff/dist/server.js"
+cmd = "PATH=$(npm prefix --global)/bin:/usr/local/bin:$PATH node bff/dist/server.js"
