@@ -3,15 +3,16 @@ nixPkgs = ["nodejs_20", "postgresql_16", "tini"]
 
 [phases.install]
 cmds = [
-  "cd /app/web && npm ci",
-  "cd /app/bff && npm ci"
+  "npm install --global n && n 20.11.1",
+  "PATH=/usr/local/bin:$PATH cd /app/web && PATH=/usr/local/bin:$PATH npm ci",
+  "PATH=/usr/local/bin:$PATH cd /app/bff && PATH=/usr/local/bin:$PATH npm ci"
 ]
 
 [phases.build]
 cmds = [
-  "cd /app/web && npm run build",
-  "cd /app/bff && npm run build"
+  "PATH=/usr/local/bin:$PATH cd /app/web && PATH=/usr/local/bin:$PATH npm run build",
+  "PATH=/usr/local/bin:$PATH cd /app/bff && PATH=/usr/local/bin:$PATH npm run build"
 ]
 
 [start]
-cmd = "node bff/dist/server.js"
+cmd = "PATH=/usr/local/bin:$PATH node bff/dist/server.js"
