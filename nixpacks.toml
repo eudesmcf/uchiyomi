@@ -1,16 +1,16 @@
 [phases.setup]
-nixPkgs = ["nodejs", "postgresql_16", "tini"]
+nixPkgs = ["nodejs_20", "postgresql_16", "tini"]
 
 [phases.install]
 cmds = [
-  "cd web && npm ci",
-  "cd ../bff && npm ci"
+  "cd /app/web && npm ci",
+  "cd /app/bff && npm ci"
 ]
 
 [phases.build]
 cmds = [
-  "cd web && npm run build",
-  "cd ../bff && npm run build"
+  "cd /app/web && npm run build",
+  "cd /app/bff && npm run build"
 ]
 
 [start]
