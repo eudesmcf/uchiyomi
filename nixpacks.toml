@@ -5,7 +5,8 @@ nixPkgs = ["nodejs_20", "postgresql_16", "tini"]
 cmds = [
   "npm install --global n && \"$(npm prefix --global)/bin/n\" 20.11.1",
   "cd /app/web && /usr/local/n/versions/node/20.11.1/bin/npm ci",
-  "cd /app/bff && /usr/local/n/versions/node/20.11.1/bin/npm ci"
+  "cd /app/bff && /usr/local/n/versions/node/20.11.1/bin/npm ci --include=optional",
+  "cd /app/bff && /usr/local/n/versions/node/20.11.1/bin/npm install --os=linux --cpu=arm64 sharp --no-save"
 ]
 
 [phases.build]
