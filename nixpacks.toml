@@ -6,7 +6,7 @@ cmds = [
   "npm install --global n && \"$(npm prefix --global)/bin/n\" 22.14.0",
   "cd /app/web && /usr/local/n/versions/node/22.14.0/bin/npm ci",
   "cd /app/bff && /usr/local/n/versions/node/22.14.0/bin/npm ci --include=optional",
-  "cd /app/bff && /usr/local/n/versions/node/22.14.0/bin/npm install --include=optional --os=linux --cpu=arm64 sharp@0.35.3 --no-save --force"
+  "cd /app/bff && /usr/local/n/versions/node/22.14.0/bin/npm install --include=optional --os=linux --cpu=arm64 sharp@0.35.3 @img/sharp-linux-arm64@0.35.3 @img/sharp-libvips-linux-arm64@1.3.2 --no-save --force"
 ]
 
 [phases.build]
