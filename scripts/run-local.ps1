@@ -13,9 +13,9 @@ if (-not $DatabaseUrl) {
 $nodeMajor = [int]((node --version).TrimStart('v').Split('.')[0])
 if ($nodeMajor -lt 22) { throw "Node 22 ou superior é necessário. Encontrado: $(node --version)" }
 
-function Invoke-Step([string]$Path, [string[]]$Args) {
+function Invoke-Step([string]$Path, [string[]]$NpmArgs) {
   Push-Location $Path
-  try { & npm @Args; if ($LASTEXITCODE -ne 0) { throw "Falha em npm $($Args -join ' ')" } }
+  try { & npm @NpmArgs; if ($LASTEXITCODE -ne 0) { throw "Falha em npm $($NpmArgs -join ' ')" } }
   finally { Pop-Location }
 }
 
