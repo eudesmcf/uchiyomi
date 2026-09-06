@@ -1,0 +1,43 @@
+param(
+  [string]$DatabaseUrl = $env:DATABASE_URL,
+  [int]$Port = 3000
+)
+
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path -Parent $PSScriptRoot
+
+if (-not $DatabaseUrl) {
+  throw 'Informe DATABASE_URL. Exemplo: .\scripts\run-local.ps1 -DatabaseUrl "postgres://uchiyomi:uchiyomi@localhost:5432/uchiyomi"'
+}
+
+$nodeMajor = [int]((node --version).TrimStart('v').Split('.')[0])
+if ($nodeMajor -lt 22) { throw "Node 22 ou superior é necessário. Encontrado: $(node --version)" }
+
+function Invoke-Step([string]$Path, [string[]]$Args) {
+  Push-Location $Path
+  try { & npm @Args; if ($LASTEXITCODE -ne 0) { throw "Falha em npm $($Args -join ' ')" } }
+  finally { Pop-Location }
+}
+
+$web = Join-Path $repo 'web'
+$bff = Join-Path $repo 'bff'
+
+Write-Host 'Instalando dependências do frontend...'
+Invoke-Step $web @('ci')
+Write-Host 'Construindo frontend...'
+Invoke-Step $web @('run', 'build')
+Write-Host 'Instalando dependências do backend...'
+Invoke-Step $bff @('ci', '--include=dev')
+Write-Host 'Construindo backend...'
+Invoke-Step $bff @('run', 'build')
+
+$env:DATABASE_URL = $DatabaseUrl
+$env:PORT = "$Port"
+$env:WEB_ROOT = (Join-Path $web 'out')
+$env:NODE_ENV = 'development'
+
+Write-Host "Uchiyomi disponível em http://localhost:$Port"
+Write-Host 'Pressione Ctrl+C para parar.'
+Push-Location $repo
+try { & node (Join-Path $bff 'dist/server.js') }
+finally { Pop-Location }
