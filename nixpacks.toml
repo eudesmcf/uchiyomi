@@ -16,4 +16,4 @@ cmds = [
 ]
 
 [start]
-cmd = "/usr/local/n/versions/node/22.14.0/bin/node bff/dist/server.js"
+cmd = "WEB_ROOT=/app/web /usr/local/n/versions/node/22.14.0/bin/node bff/dist/server.js"
