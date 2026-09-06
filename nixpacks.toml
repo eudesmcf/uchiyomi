@@ -17,3 +17,6 @@ cmds = [
 
 [start]
 cmd = "WEB_ROOT=/app/web/out /usr/local/n/versions/node/22.14.0/bin/node bff/dist/server.js"
+
+[variables]
+WEB_ROOT = "/app/web/out"
