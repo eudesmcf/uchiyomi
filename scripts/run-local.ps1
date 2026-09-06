@@ -1,6 +1,7 @@
 param(
   [string]$DatabaseUrl = $env:DATABASE_URL,
-  [int]$Port = 3000
+  [int]$Port = 3000,
+  [switch]$Fresh
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,15 +20,24 @@ function Invoke-Step([string]$Path, [string[]]$NpmArgs) {
   finally { Pop-Location }
 }
 
+function Ensure-Dependencies([string]$Path) {
+  $modules = Join-Path $Path 'node_modules'
+  if ($Fresh -or -not (Test-Path -LiteralPath $modules)) {
+    Invoke-Step $Path @('ci', '--include=dev')
+  } else {
+    Write-Host "Dependências já presentes em $Path; reutilizando node_modules. Use -Fresh para reinstalar."
+  }
+}
+
 $web = Join-Path $repo 'web'
 $bff = Join-Path $repo 'bff'
 
 Write-Host 'Instalando dependências do frontend...'
-Invoke-Step $web @('ci')
+Ensure-Dependencies $web
 Write-Host 'Construindo frontend...'
 Invoke-Step $web @('run', 'build')
 Write-Host 'Instalando dependências do backend...'
-Invoke-Step $bff @('ci', '--include=dev')
+Ensure-Dependencies $bff
 Write-Host 'Construindo backend...'
 Invoke-Step $bff @('run', 'build')
 
