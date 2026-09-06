@@ -34,7 +34,8 @@ Invoke-Step $bff @('run', 'build')
 $env:DATABASE_URL = $DatabaseUrl
 $env:PORT = "$Port"
 $env:WEB_ROOT = (Join-Path $web 'out')
-$env:NODE_ENV = 'development'
+$env:NODE_ENV = 'production'
+$env:NEXT_TELEMETRY_DISABLED = '1'
 
 Write-Host "Uchiyomi disponível em http://localhost:$Port"
 Write-Host 'Pressione Ctrl+C para parar.'
