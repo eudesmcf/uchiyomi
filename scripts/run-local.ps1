@@ -1,7 +1,8 @@
 param(
-  [string]$DatabaseUrl = $env:DATABASE_URL,
+  [string]$DatabaseUrl = $(if ($env:DATABASE_URL) { $env:DATABASE_URL } else { 'postgres://uchiyomi:uchiyomi@localhost:5432/uchiyomi' }),
   [int]$Port = 3000,
-  [switch]$Fresh
+  [switch]$Fresh,
+  [switch]$NoBrowser
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,10 +11,6 @@ $web = Join-Path $repo 'web'
 $bff = Join-Path $repo 'bff'
 $serverPath = Join-Path $bff 'dist\server.js'
 $argonPath = Join-Path $bff 'node_modules\@node-rs\argon2-win32-x64-msvc\argon2.win32-x64-msvc.node'
-
-if (-not $DatabaseUrl) {
-  throw 'Informe DATABASE_URL. Exemplo: .\scripts\run-local.ps1 -DatabaseUrl "postgres://uchiyomi:uchiyomi@localhost:5432/uchiyomi"'
-}
 
 $nodeMajor = [int]((node --version).TrimStart('v').Split('.')[0])
 if ($nodeMajor -lt 22) { throw "Node 22 ou superior e necessario. Encontrado: $(node --version)" }
@@ -139,12 +136,57 @@ function Wait-ForHealth([int]$LocalPort, [System.Diagnostics.Process]$Process) {
   throw "O backend nao respondeu com sucesso em $healthUrl."
 }
 
+function Ensure-DockerRunning {
+  Write-Host 'Verificando status do Docker...'
+  try {
+    $null = docker info 2>&1
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host 'Docker ja esta rodando.' -ForegroundColor Green
+      return
+    }
+  }
+  catch { }
+
+  Write-Host 'Docker nao esta rodando. Iniciando o Docker Desktop...' -ForegroundColor Yellow
+  $dockerDesktopPath = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
+
+  if (Test-Path -LiteralPath $dockerDesktopPath) {
+    Start-Process -FilePath $dockerDesktopPath
+  }
+  else {
+    try {
+      Start-Process 'Docker Desktop'
+    }
+    catch {
+      Write-Host 'Nao foi possivel iniciar o Docker Desktop automaticamente. Certifique-se de que o Docker esteja instalado.' -ForegroundColor Red
+      return
+    }
+  }
+
+  Write-Host 'Aguardando o Docker Desktop inicializar...' -ForegroundColor Yellow
+  $deadline = (Get-Date).AddSeconds(60)
+  while ((Get-Date) -lt $deadline) {
+    try {
+      $null = docker info 2>&1
+      if ($LASTEXITCODE -eq 0) {
+        Write-Host 'Docker iniciado com sucesso!' -ForegroundColor Green
+        return
+      }
+    }
+    catch { }
+    Start-Sleep -Seconds 2
+  }
+  Write-Host 'Aviso: Tempo esgotado aguardando a inicializacao do Docker. Prosseguindo...' -ForegroundColor Yellow
+}
+
 # O ambiente precisa estar pronto antes do build do Next.js e permanecer igual no backend.
 $env:DATABASE_URL = $DatabaseUrl
 $env:PORT = "$Port"
 $env:WEB_ROOT = (Join-Path $web 'out')
 $env:NODE_ENV = 'production'
 $env:NEXT_TELEMETRY_DISABLED = '1'
+
+Ensure-DockerRunning
 
 Stop-ExistingUchiyomi $Port
 
@@ -157,11 +199,42 @@ Ensure-Dependencies $bff 'tsc'
 Write-Host 'Construindo backend...'
 Invoke-Step $bff @('run', 'build')
 
-Write-Host 'Iniciando backend...'
+Write-Host "Iniciando backend com DATABASE_URL = $DatabaseUrl ..."
 $process = Start-Process -FilePath 'node' -ArgumentList "`"$serverPath`"" -WorkingDirectory $repo -NoNewWindow -PassThru
 try {
   Wait-ForHealth $Port $process
-  Write-Host "Uchiyomi disponivel em http://localhost:$Port"
+
+  $localUrl = "http://localhost:$Port"
+  $networkIps = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet|Virtual|WSL|Bluetooth' -and $_.IPAddress -notmatch '^169\.254|^127\.' } |
+    Select-Object -ExpandProperty IPAddress -Unique)
+
+  $primaryNetworkUrl = if ($networkIps.Count -gt 0) { "http://$($networkIps[0]):$Port" } else { $localUrl }
+
+  Write-Host ""
+  Write-Host "==========================================================" -ForegroundColor Green
+  Write-Host " Uchiyomi disponivel com sucesso!" -ForegroundColor Green
+  Write-Host " Local:        $localUrl" -ForegroundColor Cyan
+  foreach ($ip in $networkIps) {
+    Write-Host " Rede Local:   http://${ip}:$Port" -ForegroundColor Yellow
+  }
+  Write-Host "==========================================================" -ForegroundColor Green
+  Write-Host ""
+
+  $qrPageUrl = "$localUrl/qr"
+
+  $qrcodePath = Join-Path $bff 'node_modules\qrcode'
+  if (Test-Path -LiteralPath $qrcodePath) {
+    Write-Host "QR Code para acesso na sua rede local ($primaryNetworkUrl):" -ForegroundColor Magenta
+    node -e "const q=require('./bff/node_modules/qrcode'); q.toString('$primaryNetworkUrl', {type:'terminal', small:true}, (e,s)=>console.log(s))"
+    Write-Host ""
+  }
+
+  if (-not $NoBrowser) {
+    Write-Host "Abrindo pagina web com o QR Code no navegador ($qrPageUrl)..."
+    Start-Process $qrPageUrl
+  }
+
   Write-Host 'Pressione Ctrl+C para parar.'
   Wait-Process -Id $process.Id
 }
