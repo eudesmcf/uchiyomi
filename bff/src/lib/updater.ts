@@ -3,7 +3,7 @@
 // lib_series.source_id / source_series_id columns stamped at add time (backfilled once for older rows) —
 // no display-name keyword matching or <Web>-url reverse-parsing.
 import { q, one } from './db';
-import { getSource, SourceChapter, withTimeout } from './sources';
+import { getSource, SourceChapter, SourceSeries, withTimeout } from './sources';
 import { downloadChapter } from './downloader';
 import { persistScan, setBookDates } from './library';
 import { blockedNow } from './sourceHealth';
@@ -67,11 +67,41 @@ async function stampChecked(seriesId: string, chapters: number | null, missing: 
   ).catch(() => {});
 }
 
+/** Store the source's current descriptive data and complete remote chapter index without touching local state. */
+async function syncSourceCatalog(seriesId: string, s: any, source: any, ref: string, chapters: SourceChapter[]): Promise<void> {
+  // Source fields are deliberately written to lib_series, while editor changes live in series_overrides.
+  // That separation means a refresh updates stale source metadata but never erases an administrator's override.
+  const detail: SourceSeries | null = await withTimeout<SourceSeries | null>(source.getSeries(ref), budgetFor(source, LIST_TIMEOUT)).catch(() => null);
+  if (detail) {
+    await q(
+      `UPDATE lib_series
+          SET title=$2, summary=$3, author=$4, status=$5, genres=$6, web=$7,
+              source_language=COALESCE($8, source_language)
+        WHERE id=$1`,
+      [seriesId, detail.title || s.title, detail.summary ?? s.summary, detail.author ?? s.author,
+        detail.status ?? s.status, detail.genres ?? s.genres ?? [], detail.url ?? s.web,
+        s.source_language ?? null],
+    ).catch(() => {});
+  }
+  if (chapters.length) {
+    const values = chapters.map((_, i) => `($1,$2,$${i * 5 + 3},$${i * 5 + 4},$${i * 5 + 5},$${i * 5 + 6},$${i * 5 + 7},'pending')`).join(',');
+    await q(
+      `INSERT INTO source_chapters (series_id, source_id, source_chapter_id, number, title, pages, published_at, status)
+       VALUES ${values}
+       ON CONFLICT (series_id, source_chapter_id) DO UPDATE
+         SET number=EXCLUDED.number, title=EXCLUDED.title, pages=EXCLUDED.pages,
+             published_at=EXCLUDED.published_at, updated_at=now()`,
+      [seriesId, s.source_id, ...chapters.flatMap((ch) => [ch.sourceId, ch.number, ch.title || null, ch.pages || null, ch.publishedAt || null])],
+    ).catch(() => {});
+    await q('UPDATE lib_series SET books_count = GREATEST(books_count, $2) WHERE id=$1', [seriesId, chapters.length]).catch(() => {});
+  }
+}
+
 export async function updateSeries(
   seriesId: string,
   maxNew = 10,
 ): Promise<{ title: string; added: number; available: number; outcome: UpdateOutcome; failed: number; capped?: number; folder?: string; chapters?: SourceChapter[]; diskFull?: boolean }> {
-  const s = await one<any>(`SELECT id,title,source_id,source_series_id,web,folder,summary,author,genres,status FROM lib_series s WHERE s.id=$1 AND ${visibleToAll('s')}`, [seriesId]);
+  const s = await one<any>(`SELECT id,title,source_id,source_series_id,source_language,web,folder,summary,author,genres,status FROM lib_series s WHERE s.id=$1 AND ${visibleToAll('s')}`, [seriesId]);
   if (!s) return { title: '', added: 0, available: 0, outcome: 'gone', failed: 0 };
   const src = s.source_id ? getSource(s.source_id) : null;
   const ref = s.source_series_id;
@@ -82,14 +112,19 @@ export async function updateSeries(
   // indistinguishable from a series with nothing new. routes/sources.ts already separates these two, with a
   // comment saying why, two files away.
   let listFailed = false;
-  const chapters = await withTimeout(src.listChapters(ref), budgetFor(src, LIST_TIMEOUT)).catch(() => { listFailed = true; return [] as SourceChapter[]; });
+  const chapters = await withTimeout(src.listChapters(ref, s.source_language || undefined), budgetFor(src, LIST_TIMEOUT)).catch(() => { listFailed = true; return [] as SourceChapter[]; });
   // Stamped on every path where the source was ASKED, so a dead source's series still rotate to the back of
   // the queue instead of sitting at its front forever. Not stamped above, on the cooldown path: never asked.
   if (listFailed) { await stampChecked(seriesId, null, null); return { title: s.title, added: 0, available: 0, outcome: 'source_error', failed: 0 }; }
+  // The remote catalog is authoritative for what the application has already discovered. Comparing only
+  // files made every pending catalog chapter look "new" again on every refresh and requeued whole series.
+  // Snapshot it before this refresh writes the newly discovered rows; those are precisely the chapters an
+  // auto-update is allowed to enqueue.
+  const known = new Set((await q<{ source_chapter_id: string }>('SELECT source_chapter_id FROM source_chapters WHERE series_id=$1', [seriesId])).map((r) => r.source_chapter_id));
+  const localNumbers = new Set((await q<{ number: number }>('SELECT number FROM lib_books WHERE series_id=$1', [seriesId])).map((r) => Number(r.number)));
+  await syncSourceCatalog(seriesId, s, src, ref, chapters);
   if (!chapters.length) { await stampChecked(seriesId, 0, 0); return { title: s.title, added: 0, available: 0, outcome: 'ok', failed: 0 }; }
-
-  const have = new Set((await q<{ number: number }>('SELECT number FROM lib_books WHERE series_id=$1', [seriesId])).map((r) => Number(r.number)));
-  const missing = chapters.filter((c) => !have.has(c.number)).sort((a, b) => a.number - b.number);
+  const missing = chapters.filter((c) => !known.has(c.sourceId) && !localNumbers.has(c.number)).sort((a, b) => a.number - b.number);
   await stampChecked(seriesId, chapters.length, missing.length);
   // Chapters that have already failed CHAPTER_RETRY_CAP times are not attempted again by the sweep.
   const cappedNums = new Set(
@@ -114,6 +149,7 @@ export async function updateSeries(
         meta: { series: s.title, summary: s.summary, author: s.author, genres: s.genres, url: s.web, status: s.status },
       });
       if (!res.skipped) added++;
+      await q(`UPDATE source_chapters SET status='downloaded', error=NULL, updated_at=now() WHERE series_id=$1 AND source_chapter_id=$2`, [seriesId, ch.sourceId]).catch(() => {});
     } catch (e: any) {
       // The library disk is at its floor: not this chapter's fault, not the source's, and pointless to try
       // the next one. Stop here and let the sweep say so.
@@ -132,6 +168,20 @@ export async function updateSeries(
   // backfill release dates onto already-scanned books; freshly downloaded ones are stamped after the sweep's scan
   await setBookDates(s.folder, chapters).catch(() => {});
   return { title: s.title, added, available: chapters.length, outcome: 'ok', failed, capped, folder: s.folder, chapters, diskFull };
+}
+
+/** Refresh all routed source catalogs without scheduling any chapter downloads. */
+export async function refreshSourceMetadataAll(): Promise<{ total: number; refreshed: number; failed: number }> {
+  const rows = await q<{ id: string }>(`SELECT id FROM lib_series s WHERE source_id IS NOT NULL AND source_series_id IS NOT NULL AND ${visibleToAll('s')}`);
+  let refreshed = 0;
+  let failed = 0;
+  for (const row of rows) {
+    if (runtime.stopping) break;
+    const result = await updateSeries(row.id, 0).catch(() => null);
+    if (result?.outcome === 'ok') refreshed++;
+    else failed++;
+  }
+  return { total: rows.length, refreshed, failed };
 }
 
 /**

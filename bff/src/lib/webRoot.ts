@@ -64,8 +64,10 @@ export async function registerWebRoot(app: FastifyInstance): Promise<void> {
     // nginx sent `Location: /path/` relative (absolute_redirect off). @fastify/static's own redirect builds
     // an absolute URL the same way nginx did, so it is turned off and handled below instead.
     redirect: false,
-    index: false,
-    wildcard: false,
+    index: 'index.html',
+    // Next's exported chunks live several directories below _next/static. Keep wildcard
+    // enabled so they are served as files instead of falling through to index.html.
+    wildcard: true,
     // @fastify/static v10 hands this the fastify REPLY, not the raw Node response v7 passed. The old
     // `res.setHeader` threw on every static file, which the handler surfaced as a 500 for the whole
     // web root -- the suite caught it before it shipped.

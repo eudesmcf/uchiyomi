@@ -17,6 +17,16 @@ function firstLang(obj: any): string {
   return obj.en || obj['ja-ro'] || (Object.values(obj)[0] as string) || '';
 }
 
+function mangaDexLanguage(language?: string): string {
+  const value = (language || 'en').trim().toLowerCase().replace('_', '-');
+  return value === 'pt' ? 'pt-br' : value;
+}
+
+function chapterListUrl(seriesId: string, language?: string): string {
+  const lang = mangaDexLanguage(language);
+  return `${API}/manga/${seriesId}/feed?translatedLanguage[]=${encodeURIComponent(lang)}&order[chapter]=asc&order[volume]=asc&limit=500&offset=0&${RATINGS}`;
+}
+
 function toSeries(m: any): SourceSeries {
   const a = m.attributes || {};
   const cover = (m.relationships || []).find((r: any) => r.type === 'cover_art');
@@ -56,17 +66,19 @@ export const mangadex: SourceAdapter = {
   },
 
   // Browse recently-updated series (no query) — powers the Discover "Newest" view.
-  async latest(page = 1) {
+  async latest(page = 1, language = 'en') {
     const offset = (Math.max(1, page) - 1) * 24;
-    const j = await jget(`${API}/manga?order[latestUploadedChapter]=desc&limit=24&offset=${offset}&hasAvailableChapters=true&availableTranslatedLanguage[]=en&${RATINGS}&includes[]=cover_art&includes[]=author`);
+    const lang = mangaDexLanguage(language);
+    const j = await jget(`${API}/manga?order[latestUploadedChapter]=desc&limit=24&offset=${offset}&hasAvailableChapters=true&availableTranslatedLanguage[]=${encodeURIComponent(lang)}&${RATINGS}&includes[]=cover_art&includes[]=author`);
     return (j.data || []).map(toSeries);
   },
 
   // The same endpoint and the same filters, ordered by how many people follow the series. `toSeries` does
   // not care how the list was sorted, so this is one query parameter and no new parsing.
-  async popular(page = 1) {
+  async popular(page = 1, language = 'en') {
     const offset = (Math.max(1, page) - 1) * 24;
-    const j = await jget(`${API}/manga?order[followedCount]=desc&limit=24&offset=${offset}&hasAvailableChapters=true&availableTranslatedLanguage[]=en&${RATINGS}&includes[]=cover_art&includes[]=author`);
+    const lang = mangaDexLanguage(language);
+    const j = await jget(`${API}/manga?order[followedCount]=desc&limit=24&offset=${offset}&hasAvailableChapters=true&availableTranslatedLanguage[]=${encodeURIComponent(lang)}&${RATINGS}&includes[]=cover_art&includes[]=author`);
     return (j.data || []).map(toSeries);
   },
 
@@ -75,12 +87,15 @@ export const mangadex: SourceAdapter = {
     return j.data ? toSeries(j.data) : null;
   },
 
-  async listChapters(seriesId) {
+  chapterListUrl,
+
+  async listChapters(seriesId, language = 'en') {
     const all: SourceChapter[] = [];
+    const lang = mangaDexLanguage(language);
     let offset = 0;
     let total = Infinity;
     while (offset < total) {
-      const j = await jget(`${API}/manga/${seriesId}/feed?translatedLanguage[]=en&order[chapter]=asc&order[volume]=asc&limit=500&offset=${offset}&${RATINGS}`);
+      const j = await jget(chapterListUrl(seriesId, lang).replace('offset=0', `offset=${offset}`));
       total = j.total ?? 0;
       for (const c of j.data || []) {
         const num = parseFloat(c.attributes?.chapter);

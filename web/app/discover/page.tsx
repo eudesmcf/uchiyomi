@@ -18,7 +18,7 @@ import { AddSeriesDialog, AddSeed } from '@/components/AddSeriesDialog';
 import { IcChevronLeft, IcSearch, IcSparkle, IcX } from '@/components/icons';
 
 interface Job { folder: string; title: string; total: number; done: number; status: string; reason?: string }
-interface SearchGroup { title: string; coverUrl?: string; inLibrary?: boolean; updatedAt?: string; providers: { source: string; name: string; sourceId: string; title: string; coverUrl?: string }[] }
+interface SearchGroup { title: string; coverUrl?: string; inLibrary?: boolean; updatedAt?: string; providers: { source: string; name: string; sourceId: string; title: string; coverUrl?: string; lang?: string }[] }
 
 /**
  * How many titles the hero rotates through.
@@ -88,6 +88,8 @@ export default function DiscoverPage() {
    * sort within browsing.
    */
   const [listMode, setListMode] = useState<ListMode>('newest');
+  // Portuguese is the app's content-language default; the UI locale remains independently configurable.
+  const [sourceLang, setSourceLang] = useState('pt-br');
   const [selected, setSelected] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
@@ -99,10 +101,33 @@ export default function DiscoverPage() {
   const [seed, setSeed] = useState<AddSeed | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
 
+  const languageBase = (value?: string | null) => value?.trim().toLowerCase().replace('_', '-').split('-')[0] ?? '';
+
+  // Language filtering is applied before ranking, so Portuguese sources can actually be selected and asked
+  // for data instead of merely being hidden among the global source budget.
+  const languageOptions = useMemo(() => {
+    const values = new Set<string>();
+    for (const source of sources) {
+      if (source.lang?.trim()) values.add(source.lang.trim());
+    }
+    // MangaDex is multi-language even though its adapter has English as the default.
+    // Keep Portuguese available in the picker so it can change the upstream request.
+    values.add('pt-br');
+    return [...values].sort((a, b) => a.localeCompare(b));
+  }, [sources]);
+  const filteredSources = useMemo(() => {
+    if (sourceLang === 'all') return sources;
+    const wanted = languageBase(sourceLang);
+    return sources.filter((source) =>
+      // MangaDex is multi-language; its `lang: en` value is only the default request language.
+      source.id === 'mangadex' || languageBase(source.lang) === wanted,
+    );
+  }, [sources, sourceLang]);
+
   // Ranked once; how many of them are actually asked grows as answers come back.
   // A source that cannot answer the chosen listing is not ranked at all, the same way one without `latest`
   // has never been. Popular is universal among extensions but absent from a few site engines.
-  const ranked = useMemo(() => budgetForMode(sources, listMode, 12), [sources, listMode]);
+  const ranked = useMemo(() => budgetForMode(filteredSources, listMode, 12), [filteredSources, listMode]);
 
   // Nothing resets the wall any more. That reset -- and specifically resetting it WITHOUT remounting the
   // children, which kept their React keys and their cached queries -- is what left the page counting sources
@@ -183,7 +208,7 @@ export default function DiscoverPage() {
       const r = await api<{ content: SearchGroup[] }>(`/api/sources/search-all?q=${encodeURIComponent(term)}`);
       setSearchHits((r.content ?? []).map((g) => ({
         source: g.providers[0]?.source ?? '', sourceId: g.providers[0]?.sourceId ?? g.title,
-        title: g.title, coverUrl: g.coverUrl, updatedAt: g.updatedAt,
+        title: g.title, coverUrl: g.coverUrl, updatedAt: g.updatedAt, lang: sourceLang,
         inLibrary: g.inLibrary, providerCount: g.providers.length,
       })));
       (r.content ?? []).forEach((g) => { (groupsRef.current as any)[norm(g.title)] = g.providers; });
@@ -192,12 +217,21 @@ export default function DiscoverPage() {
   };
   const groupsRef = useRef<Record<string, SearchGroup['providers']>>({});
   const backToNewest = () => { setQ(''); setMode('newest'); setSearchHits([]); };
+  const changeSourceLanguage = (next: string) => {
+    setSourceLang(next);
+    setSelected(null);
+    setPage(1);
+    // A language change is a new listing. Do not append Portuguese cards to the previous English result set.
+    setById({});
+    setOrder([]);
+    setStates({});
+  };
 
   const open = (it: SourceItem) => {
     if (it.inLibrary || added.has(norm(it.title))) return;
     const providers = groupsRef.current[norm(it.title)];
     if (providers?.length) setSeed({ kind: 'group', title: it.title, providers });
-    else setSeed({ kind: 'result', provider: { source: it.source, name: nameOf(it.source) ?? it.source, sourceId: it.sourceId, title: it.title, coverUrl: it.coverUrl } });
+    else setSeed({ kind: 'result', provider: { source: it.source, name: nameOf(it.source) ?? it.source, sourceId: it.sourceId, title: it.title, coverUrl: it.coverUrl, lang: sourceLang } });
   };
 
   // ---------------------------------------------------------------- more
@@ -285,6 +319,23 @@ export default function DiscoverPage() {
             <h1 className="font-display text-2xl font-bold tracking-tight lg:text-3xl">{tr('Discover')}</h1>
             <p className="mt-0.5 text-sm text-fog-400">{tr('Newest from your sources')}</p>
           </div>
+          <label className="field flex items-center gap-2 py-0 text-sm">
+            <span className="text-xs text-fog-500">{tr('Language')}</span>
+            <select
+              value={sourceLang}
+              onChange={(e) => changeSourceLanguage(e.target.value)}
+              className="cursor-pointer bg-ink-800 py-2.5 text-fog-100 outline-none [color-scheme:dark]"
+              style={{ colorScheme: 'dark' }}
+              aria-label={tr('Language')}
+            >
+              <option value="all">{tr('All languages')}</option>
+              {languageOptions.map((lang) => {
+                const base = lang.toLowerCase().split('-')[0];
+                const label = base === 'pt' ? 'Português' : base === 'en' ? 'English' : lang;
+                return <option key={lang} value={lang}>{label}{lang.includes('-') ? ` (${lang})` : ''}</option>;
+              })}
+            </select>
+          </label>
           <form onSubmit={search} className="flex w-full items-center gap-2 sm:w-auto">
             <div className="field flex min-w-0 flex-1 items-center gap-2 py-0 sm:w-72 lg:w-80">
               <IcSearch width={17} height={17} className="shrink-0 text-fog-500" />
@@ -317,7 +368,7 @@ export default function DiscoverPage() {
           other listing. That pairing is not optional: a child that keeps its key keeps its cached query,
           never re-reports, and the wall waits forever on a source it thinks it has not heard from. */}
       {mode === 'newest' && budget.map((s, i) => (
-        <SourceLatest key={`${listMode}:${s.id}:${page}`} source={s} listMode={listMode}
+      <SourceLatest key={`${listMode}:${s.id}:${sourceLang}:${page}`} source={s} listMode={listMode} language={sourceLang === 'all' ? undefined : sourceLang}
           page={page} enabled={i < gate} onSettled={onSettled} />
       ))}
 
@@ -408,7 +459,7 @@ export default function DiscoverPage() {
 
       {seed && (
         <AddSeriesDialog
-          seed={seed}
+          seed={seed.kind === 'trending' ? seed : seed.kind === 'result' ? { ...seed, provider: { ...seed.provider, lang: seed.provider.lang || sourceLang } } : { ...seed, providers: seed.providers.map((p) => ({ ...p, lang: p.lang || sourceLang })) }}
           sources={budgetIds}
           onClose={() => setSeed(null)}
           onAdded={(r) => {

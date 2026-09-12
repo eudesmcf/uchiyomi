@@ -80,8 +80,6 @@ function ReaderInner() {
   const [colW, setColW] = useState(0);
   const didInitScroll = useRef(false);
   const blobUrls = useRef<Map<string, string>>(new Map());
-  const appending = useRef(false);
-  const noMore = useRef(false);
   const tap = useRef<{ x: number; y: number; t: number } | null>(null);
   const lastTapAt = useRef(0);
   const tapTimer = useRef<any>(null);
@@ -89,15 +87,22 @@ function ReaderInner() {
   const pinch = useRef<{ dist: number; zoom: number } | null>(null);
 
   const seriesId0 = chapters[0]?.seriesId || '';
-  const setPref = (p: Partial<ReaderPrefs>) =>
+  const setPref = (p: Partial<ReaderPrefs>) => {
+    // A magnification saved while reading paged manga must not make a vertical/Webtoon strip start
+    // already enlarged. Webtoon is intentionally near fit-width; pinch is still allowed up to 120%.
+    if (p.mode === 'vertical') {
+      setZoom(1);
+      if (seriesId0) saveSeriesPrefs(seriesId0, { zoom: 1 });
+    }
     setPrefs((cur) => {
       const n = { ...cur, ...p };
       savePrefs(n);
       if ((p.mode || p.theme || p.spread !== undefined) && seriesId0) saveSeriesPrefs(seriesId0, { mode: n.mode, theme: n.theme, spread: n.spread });
       return n;
     });
+  };
   const applyZoom = (z: number) => {
-    const clamped = Math.max(1, Math.min(3, z));
+    const clamped = Math.max(1, Math.min(prefs.mode === 'vertical' ? 1.2 : 3, z));
     setZoom(clamped);
     if (seriesId0) saveSeriesPrefs(seriesId0, { zoom: clamped });
   };
@@ -108,8 +113,6 @@ function ReaderInner() {
     setReady(false);
     setEnded(false);
     didInitScroll.current = false;
-    appending.current = false;
-    noMore.current = false;
     completedSent.current.clear();
     prevPos.current = null;
     blobUrls.current.forEach((u) => URL.revokeObjectURL(u));
@@ -187,13 +190,15 @@ function ReaderInner() {
   useEffect(() => {
     const measure = () => {
       const w = scrollRef.current?.clientWidth || window.innerWidth;
-      const base = prefs.fitWidth ? Math.min(w, 860) : w;
+      // A webtoon strip needs reading width, not a poster-sized desktop column. It also uses a slightly
+      // narrower ceiling than paged manga, which preserves the intended vertical rhythm on wide screens.
+      const base = prefs.fitWidth ? Math.min(w, prefs.mode === 'vertical' ? 720 : 860) : w;
       setColW(base * zoom);
     };
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [prefs.fitWidth, ready, zoom]);
+  }, [prefs.fitWidth, prefs.mode, ready, zoom]);
 
   // keep the page roughly centered/in-place when zooming
   useEffect(() => {
@@ -282,32 +287,29 @@ function ReaderInner() {
       setCurrent((c) => (c === i ? c : i));
       return;
     }
+    // A scrollbar can stop a few pixels before the final image, especially with mobile momentum scrolling.
+    // Force the last real page into the active state at the boundary so completion is not dependent on one
+    // exact intermediate scroll event.
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 32 && tops.length) {
+      setCurrent((c) => (c === tops.length - 1 ? c : tops.length - 1));
+      return;
+    }
     const probe = el.scrollTop + el.clientHeight * 0.4;
     let lo = 0, hi = tops.length - 1, ans = 0;
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (tops[mid] <= probe) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
     setCurrent((c) => (c === ans ? c : ans));
   }, [tops, prefs.mode, slides]);
 
-  // ---- continuous reading: append next chapter near the end ----
+  // ---- chapter boundary ----
+  // Keep one chapter in the page sequence. Appending the next chapter while the reader was still displaying
+  // the current one made its page counter grow past the source's real page count. The right arrow and the
+  // chapter selector remain the explicit way to move to the next chapter.
   useEffect(() => {
-    if (!ready || !flat.length || appending.current || noMore.current) return;
-    if (current < flat.length - 4) return;
-    appending.current = true;
-    (async () => {
-      const last = chapters[chapters.length - 1];
-      const idx = chapterRefs.findIndex((c) => c.id === last?.id);
-      const next = idx >= 0 ? chapterRefs[idx + 1] : null;
-      if (!next) { noMore.current = true; setEnded(true); appending.current = false; return; }
-      const ch = await loadChapter(next.id);
-      const outcome = chapterOutcome(ch);
-      if (outcome === 'ok') setChapters((cs) => (cs.some((c) => c.id === ch!.id) ? cs : [...cs, ch!]));
-      // There IS a next chapter -- chapterRefs says so -- and it would not load. Claiming the series is
-      // finished here is how a corrupt file or a dropped connection came to read as an ending.
-      else { noMore.current = true; setFailed(outcome); }
-      appending.current = false;
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, ready, flat.length, chapterRefs]);
+    if (!ready || !flat.length) return;
+    const active = chapters[flat[current]?.ci ?? 0];
+    const atLastChapter = !!active && chapterRefs.findIndex((c) => c.id === active.id) === chapterRefs.length - 1;
+    setEnded(atLastChapter && current >= flat.length - 1);
+  }, [current, ready, flat.length, chapters, chapterRefs]);
 
   // ---- submit progress for the active chapter ----
   // Two paths: (a) regular page progress, debounced 600ms; (b) chapter COMPLETION, sent immediately —
@@ -398,7 +400,19 @@ function ReaderInner() {
   const seriesHref = activeSeriesId ? `/series/?id=${activeSeriesId}` : null;
 
   const back = () => (typeof window !== 'undefined' && window.history.length > 1 ? router.back() : router.push(seriesId ? `/series/?id=${seriesId}` : '/'));
-  const goChapter = (cid?: string) => { if (cid) router.replace(`/reader/?book=${cid}`); };
+  const goChapter = useCallback((cid?: string) => { if (cid) router.replace(`/reader/?book=${cid}`); }, [router]);
+  const movePage = useCallback((direction: -1 | 1) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // Webtoon has no discrete pages: page movement is one viewport of scroll.
+    if (prefs.mode === 'vertical') { el.scrollBy({ top: direction * el.clientHeight * 0.88, behavior: 'smooth' }); return; }
+    const currentSlide = slideOf[current] ?? 0;
+    const targetSlide = currentSlide + direction;
+    // A chapter is deliberately kept as a single page sequence. Crossing its edge is a
+    // chapter action, never an implicit append that changes the source page count.
+    if (targetSlide < 0 || targetSlide >= slides.length) return;
+    el.scrollTo({ left: targetSlide * el.clientWidth, behavior: 'smooth' });
+  }, [current, goChapter, nextId, prefs.mode, prevId, slideOf, slides.length]);
   const toggleFullscreen = () => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else document.documentElement.requestFullscreen?.().catch(() => {});
@@ -442,17 +456,23 @@ function ReaderInner() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = scrollRef.current;
-      if (e.key === '[') goChapter(prevId);
-      else if (e.key === ']') goChapter(nextId);
+      if (e.key === '[') { e.preventDefault(); goChapter(prevId); }
+      else if (e.key === ']') { e.preventDefault(); goChapter(nextId); }
       else if (e.key === 'f') toggleFullscreen();
       else if (e.key === 'Escape') back();
       else if (el && prefs.mode === 'vertical' && (e.key === ' ' || e.key === 'ArrowDown')) { e.preventDefault(); el.scrollBy({ top: el.clientHeight * 0.88, behavior: 'smooth' }); }
       else if (el && prefs.mode === 'vertical' && e.key === 'ArrowUp') { e.preventDefault(); el.scrollBy({ top: -el.clientHeight * 0.88, behavior: 'smooth' }); }
+      else if (prefs.mode === 'vertical' && e.key === 'ArrowLeft') { e.preventDefault(); goChapter(prevId); }
+      else if (prefs.mode === 'vertical' && e.key === 'ArrowRight') { e.preventDefault(); goChapter(nextId); }
+      else if (prefs.mode === 'paged' && e.key === 'ArrowLeft') { e.preventDefault(); movePage(-1); }
+      else if (prefs.mode === 'paged' && e.key === 'ArrowRight') { e.preventDefault(); movePage(1); }
+      else if (prefs.mode === 'paged' && e.key === 'ArrowUp') { e.preventDefault(); goChapter(prevId); }
+      else if (prefs.mode === 'paged' && e.key === 'ArrowDown') { e.preventDefault(); goChapter(nextId); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prevId, nextId, prefs.mode, seriesId]);
+  }, [back, movePage, prefs.mode, prevId, nextId, seriesId]);
 
   // ---- tap / double-tap / pinch (no overlay -> native scroll works) ----
   const onPointerDown = (e: React.PointerEvent) => {
@@ -599,6 +619,22 @@ function ReaderInner() {
     </motion.div>
   );
 
+  // Reaching the end of an ordinary chapter must not leave an unlabelled black tail. We intentionally do
+  // not append the next chapter's pages (that corrupts the page count); instead this is an explicit bridge.
+  const chapterFinished = !!activeChapter && current >= flat.length - 1;
+  const chapterCompleteCard = nextId && (
+    <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}
+      className="mx-auto w-full max-w-3xl px-6 py-16 text-center">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-400">{tr('Read')}</p>
+      <h2 className="mt-1.5 font-display text-2xl font-bold text-white">{activeChapter?.title}</h2>
+      <p className="mx-auto mt-3 max-w-md text-sm text-fog-400">{tr('Chapter completed')}</p>
+      <div className="mt-6 flex justify-center gap-2">
+        <button onClick={() => goChapter(nextId)} className="btn-accent text-sm">{tr('Next chapter')}</button>
+        <button onClick={() => (seriesHref ? router.push(seriesHref) : back())} className="btn-ghost text-sm">{tr('Back to series')}</button>
+      </div>
+    </motion.div>
+  );
+
   return (
     <div className="fixed inset-0 z-40 bg-ink-950">
       <div className="pointer-events-none absolute inset-0 z-30 bg-black" style={{ opacity: 1 - prefs.brightness }} />
@@ -625,14 +661,14 @@ function ReaderInner() {
                 <div style={{ height: heights[i] || undefined, marginBottom: prefs.gap }} className="relative w-full bg-ink-900">
                   {activeSet.has(i) && srcFor(i) ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={srcFor(i)!} alt={`Page ${p.number}`} className="block h-full w-full object-cover" decoding="async" />
+                    <img src={srcFor(i)!} alt={`Page ${p.number}`} className="block h-full w-full object-contain" decoding="async" />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center text-xs text-ink-600">{p.number}</div>
                   )}
                 </div>
               </div>
             ))}
-            {ended && upNextCard}
+            {chapterFinished && (nextId ? chapterCompleteCard : upNextCard)}
             {failed && !!flat.length && failureCard}
           </div>
         </div>
@@ -657,9 +693,9 @@ function ReaderInner() {
               </div>
             );
           })}
-          {ended && (
+          {chapterFinished && (
             <div className="flex h-full w-full shrink-0 snap-center items-start justify-center overflow-y-auto">
-              {upNextCard}
+              {nextId ? chapterCompleteCard : upNextCard}
             </div>
           )}
           {failed && !!flat.length && (
@@ -733,7 +769,8 @@ function ReaderInner() {
                     </div>
                   );
                 })()}
-                <button onClick={() => goChapter(prevId)} disabled={!prevId}
+                <button onClick={() => movePage(-1)} disabled={!prevId && current <= 0}
+                  aria-label={tr('Previous page')}
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur disabled:opacity-30">
                   <IcChevronLeft width={18} height={18} />
                 </button>
@@ -749,7 +786,8 @@ function ReaderInner() {
                     else scrollRef.current?.scrollTo({ left: (slideOf[idx] ?? idx) * (scrollRef.current?.clientWidth || 0) });
                   }}
                   className="h-1 flex-1 accent-[rgb(var(--accent))]" />
-                <button onClick={() => goChapter(nextId)} disabled={!nextId}
+                <button onClick={() => movePage(1)} disabled={!nextId && current >= total - 1}
+                  aria-label={tr('Next page')}
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur disabled:opacity-30">
                   <IcChevronRight width={18} height={18} />
                 </button>

@@ -79,7 +79,7 @@ function prettyStatus(s?: string | null): string | undefined {
   return s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, ' ');
 }
 
-function toSeries(m: RemoteManga, adapterId: string): SourceSeries | null {
+function toSeries(m: RemoteManga, adapterId: string, fallbackUrl?: string | null): SourceSeries | null {
   // A row without an id can't be routed back to Suwayomi, and one without a title is not a real result.
   if (m?.id == null || !m.title?.trim()) return null;
   return {
@@ -92,7 +92,7 @@ function toSeries(m: RemoteManga, adapterId: string): SourceSeries | null {
     status: prettyStatus(m.status),
     // Suwayomi proxies covers through itself, so make the path absolute against its origin.
     coverUrl: m.thumbnailUrl ? suwayomiUrl(m.thumbnailUrl) : undefined,
-    url: m.realUrl || undefined,
+    url: m.realUrl || m.url || fallbackUrl || undefined,
   };
 }
 
@@ -133,7 +133,7 @@ export function makeSuwayomiAdapter(remote: RemoteSource, run: Gql = defaultGql)
     if (!Array.isArray(list)) return [];
     const seen = new Set<string>();
     return list
-      .map((m) => toSeries(m, adapterId))
+      .map((m) => toSeries(m, adapterId, remote.baseUrl))
       .filter((s): s is SourceSeries => !!s && (seen.has(s.sourceId) ? false : (seen.add(s.sourceId), true)));
   };
 
@@ -148,6 +148,7 @@ export function makeSuwayomiAdapter(remote: RemoteSource, run: Gql = defaultGql)
     // Served to browsers through /img/sources/icon/:id, never linked directly: the extension server is not
     // reachable from a browser.
     iconUrl: remote.iconUrl?.trim() || undefined,
+    base: remote.baseUrl?.trim() || undefined,
     requiresCloudflare: false,
     imageHeaders: suwayomiImageHeaders,
     // After the built-ins but ahead of user-added engine sites: an extension is usually a better-maintained
@@ -161,7 +162,7 @@ export function makeSuwayomiAdapter(remote: RemoteSource, run: Gql = defaultGql)
     async getSeries(id) {
       const d = await run<{ fetchManga: { manga: RemoteManga | null } }>(FETCH_MANGA, { id: Number(id) });
       const m = d?.fetchManga?.manga;
-      return m ? toSeries(m, adapterId) : null;
+      return m ? toSeries(m, adapterId, remote.baseUrl) : null;
     },
 
     async listChapters(seriesId) {

@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { Page, Series } from '@/lib/types';
 import { Modal, msgOf } from '@/components/ConfirmDialog';
 import { Img, ProgressBar } from '@/components/ui';
 import { sourceCover } from '@/components/cards';
@@ -12,10 +11,11 @@ import { useToast } from '@/components/Toast';
 import { IcCheck, IcChevronLeft } from '@/components/icons';
 import { t as tr } from '@/lib/i18n';
 
-export interface Provider { source: string; name: string; sourceId: string; title: string; coverUrl?: string }
+export interface Provider { source: string; name: string; sourceId: string; title: string; coverUrl?: string; lang?: string }
 interface Detail {
   source: string; sourceId: string; title: string; summary: string; coverUrl: string | null;
   genres: string[]; status: string; count: number; first: number | null; last: number | null;
+    language?: string | null; chapterUrl?: string; seriesUrl?: string; chapters: { sourceId: string; number: number; title?: string }[];
 }
 interface Job { folder: string; title: string; total: number; done: number; status: string }
 
@@ -24,7 +24,6 @@ export type AddSeed =
   | { kind: 'result'; provider: Provider }
   | { kind: 'group'; title: string; providers: Provider[] };
 
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
 /** Never render a swept-up <style>/<script> block as a description. The BFF guards this too. */
 const looksCss = (s: string) =>
   s.length > 2500 || /<\/?(?:style|script)\b|\.[a-z][\w-]*\s*[{,]|@import|gtag\(|wp-manga|woocommerce|datalayer/i.test(s);
@@ -45,7 +44,7 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
   /** Which sources to look in. Unscoped, one tap is an outbound request to every source on the server. */
   sources: string[];
   onClose: () => void;
-  onAdded: (r: { title: string; folder: string; chapters: number }) => void;
+  onAdded: (r: { title: string; folder: string; chapters: number; seriesId?: string }) => void;
 }) {
   const toast = useToast();
   const router = useRouter();
@@ -57,11 +56,11 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
   );
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(false);
-  const [count, setCount] = useState(0);
+  const [selection, setSelection] = useState<'none' | 'first' | 'ten' | 'all'>('none');
   const [autoUpdate, setAutoUpdate] = useState(true);
   const [adding, setAdding] = useState(false);
   const [dup, setDup] = useState<string | null>(null);
-  const [done, setDone] = useState<{ title: string; folder: string; chapters: number; started?: boolean } | null>(null);
+  const [done, setDone] = useState<{ title: string; folder: string; chapters: number; started?: boolean; seriesId?: string } | null>(null);
   const [opening, setOpening] = useState(false);
   const title = seed.kind === 'result' ? seed.provider.title : seed.title;
 
@@ -82,8 +81,8 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
     if (!picked) return;
     const mine = ++want.current;
     setLoading(true); setDetail(null);
-    api<Detail>(`/api/sources/detail?source=${encodeURIComponent(picked.source)}&sourceId=${encodeURIComponent(picked.sourceId)}`)
-      .then((d) => { if (mine === want.current) { setDetail(d); setCount(d.count); } })
+    api<Detail>(`/api/sources/detail?source=${encodeURIComponent(picked.source)}&sourceId=${encodeURIComponent(picked.sourceId)}${picked.lang ? `&lang=${encodeURIComponent(picked.lang)}` : ''}`)
+      .then((d) => { if (mine === want.current) { setDetail(d); setSelection('none'); } })
       .catch(() => { if (mine === want.current) setDetail(null); })
       .finally(() => { if (mine === want.current) setLoading(false); });
   }, [picked]);
@@ -92,7 +91,7 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
   const { data: jobs } = useQuery({
     queryKey: ['source-jobs'],
     queryFn: () => api<{ content: Job[] }>('/api/sources/jobs'),
-    enabled: !!done,
+    enabled: !!done && done.chapters > 0,
     refetchInterval: 2000,
   });
   const job = done ? (jobs?.content ?? []).find((j) => j.folder === done.folder) : undefined;
@@ -101,8 +100,10 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
     if (!picked) return;
     setAdding(true); setDup(null);
     try {
-      const r = await api<{ title: string; folder: string; chapters: number; started?: boolean }>('/api/sources/add', {
-        json: { source: picked.source, sourceId: picked.sourceId, chapterCount: count || undefined, autoUpdate, force },
+      const r = await api<{ title: string; folder: string; chapters: number; started?: boolean; seriesId?: string }>('/api/sources/add', {
+        json: { source: picked.source, sourceId: picked.sourceId,
+          chapterCount: selection === 'first' ? 1 : selection === 'ten' ? 10 : selection === 'all' ? undefined : undefined,
+          download: selection !== 'none', libraryOnly: selection === 'none', autoUpdate, force, lang: picked.lang },
         // The client has never set a timeout anywhere, so the only bound was the proxy's 120s -- which
         // turned a slow-but-working add into "Add failed. Try another source." while the download carried
         // on. The request now answers in seconds, so this is a backstop rather than the usual path.
@@ -122,13 +123,10 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
   const openIt = async () => {
     if (!done) return;
     setOpening(true);
-    try {
-      // addSeriesFromSource persists the scan before returning, so in owned mode the row exists by now.
-      const p = await api<Page<Series>>('/api/series/search', { json: { fullTextSearch: done.title, size: 5 } });
-      const hit = p.content.find((s) => norm(s.metadata?.title || s.name) === norm(done.title)) ?? p.content[0];
-      qc.invalidateQueries({ queryKey: ['library'] });
-      router.push(hit ? `/series/?id=${hit.id}` : '/downloads/');
-    } catch { router.push('/downloads/'); }
+    qc.invalidateQueries({ queryKey: ['library'] });
+    // The server returns the exact created/reused row. A title search can select an older work with the
+    // same spelling, and push leaves Discover behind the new series on the back stack.
+    router.replace(done.seriesId ? `/series/?id=${done.seriesId}` : '/library');
   };
 
   // ---------------------------------------------------------------- done
@@ -195,20 +193,20 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
 
   // ---------------------------------------------------------------- options
   const summary = detail?.summary && !looksCss(detail.summary) ? detail.summary : '';
-  const presets = [10, 25, 50, 100, 200].filter((n) => detail && n < detail.count);
+  const selectedCount = selection === 'none' ? 0 : selection === 'first' ? Math.min(1, detail?.count || 0) : selection === 'ten' ? Math.min(10, detail?.count || 0) : detail?.count || 0;
 
   return (
     // Not dismissable while the request is in flight. Escape or a backdrop click used to unmount the dialog
     // mid-add: the add still completed, but `setDone` and `onAdded` ran against nothing, so there was no
     // confirmation and the tile was never marked as added -- the worst possible version of "did that work?"
-    <Modal title={detail?.title || title} onClose={adding ? () => {} : onClose} wide>
+    <Modal title={detail?.title || title} onClose={adding ? () => {} : onClose}>
       {loading || !detail ? (
         <p className="py-10 text-center text-sm text-fog-500">{tr('Loading…')}</p>
       ) : (
         <div className="sm:flex sm:gap-4">
-          <div className="mb-3 shrink-0 sm:mb-0 sm:w-40">
+          <div className="mb-3 shrink-0 sm:mb-0 sm:w-28">
             <Img src={sourceCover(detail.source, detail.coverUrl)} alt="" fallbackSrc={detail.coverUrl || undefined}
-              className="aspect-[2/3] w-28 rounded-xl border border-ink-700 sm:w-40" />
+              className="aspect-[2/3] w-24 rounded-xl border border-ink-700 sm:w-28" />
           </div>
           <div className="min-w-0 flex-1">
             {providers && providers.length > 1 && (
@@ -220,32 +218,53 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
               {detail.count} {detail.count === 1 ? tr('chapter') : tr('chapters')}
               {detail.first != null && detail.last != null && <> · {detail.first}–{detail.last}</>}
             </p>
+            <div className="mt-2 rounded-lg border border-ink-700 bg-ink-900/60 px-2.5 py-2 text-[11px] text-fog-400">
+              <p><span className="font-semibold text-fog-300">{tr('Language consulted')}:</span> {detail.language || picked.lang || tr('source default')}</p>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                {detail.chapterUrl ? <a href={detail.chapterUrl} target="_blank" rel="noreferrer" className="inline-flex h-6 items-center gap-1 rounded-full border border-accent/50 px-2 text-[10px] font-medium text-accent hover:bg-accent/10" title={tr('Open feed URL')}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 3h7v7M10 14 21 3M21 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h6" /></svg>{tr('Feed URL')}
+                </a> : <span>{tr('Feed URL')}: {tr('Not provided by this source')}</span>}
+                {detail.seriesUrl && <a href={detail.seriesUrl} target="_blank" rel="noreferrer" className="inline-flex h-6 items-center gap-1 rounded-full border border-accent/50 px-2 text-[10px] font-medium text-accent hover:bg-accent/10" title={tr('Open work link')}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 3h7v7M10 14 21 3M21 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h6" /></svg>{tr('Work link')}
+                </a>}
+              </div>
+            </div>
+            {(detail.chapterUrl || detail.seriesUrl) && (
+              <p className="mt-1 text-[11px] text-fog-500">{tr('The link opens the official source request in a new tab.')}</p>
+            )}
+            {detail.count === 0 && <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">
+              {tr('This source returned no chapters in the selected language. Choose another language or source.')}
+            </p>}
             {detail.genres.length > 0 && (
               <p className="mt-1 line-clamp-1 text-[11px] text-fog-500">{detail.genres.slice(0, 4).join(' · ')}</p>
             )}
             {summary && <p className="mt-2 line-clamp-4 text-xs leading-relaxed text-fog-400">{summary}</p>}
 
-            <label className="mb-1 mt-4 block text-xs font-semibold uppercase tracking-wider text-fog-500">{tr('Chapters to download')}</label>
-            <select value={count} onChange={(e) => setCount(Number(e.target.value))} className="field">
-              <option value={detail.count}>{tr('All ({n})', { n: detail.count })}</option>
-              {presets.map((n) => <option key={n} value={n}>{tr('First {n}', { n })}</option>)}
-            </select>
+            <label className="mb-1 mt-4 block text-xs font-semibold uppercase tracking-wider text-fog-500">{tr('Download selection')}</label>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => setSelection('none')} className={`chip ${selection === 'none' ? 'border-accent text-accent' : ''}`}>{tr('No download')}</button>
+              <button onClick={() => setSelection('first')} className={`chip ${selection === 'first' ? 'border-accent text-accent' : ''}`}>{tr('Download first chapter')}</button>
+              <button onClick={() => setSelection('ten')} className={`chip ${selection === 'ten' ? 'border-accent text-accent' : ''}`}>{tr('Download first 10')}</button>
+              <button onClick={() => setSelection('all')} className={`chip ${selection === 'all' ? 'border-accent text-accent' : ''}`}>{tr('Download all')}</button>
+            </div>
 
             <div className="mt-3 flex items-center justify-between gap-3">
               <span className="text-sm text-fog-200">{tr('Auto-update new chapters')}</span>
               <Switch on={autoUpdate} onChange={setAutoUpdate} label={tr('Auto-update new chapters')} />
             </div>
 
-            {count > 40 && (
+            {selectedCount > 40 && (
               <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">
                 {tr('Grabbing many chapters at once can get you rate-limited. It pauses on its own and you can resume later.')}
               </p>
             )}
             {dup && <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">{dup}</p>}
 
-            <button onClick={() => add(!!dup)} disabled={adding} className="btn-accent mt-4 w-full py-2.5 text-sm disabled:opacity-50">
-              {adding ? tr('Working…') : dup ? tr('Add anyway') : tr('Add to library')}
-            </button>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row-reverse">
+              <button onClick={() => add(!!dup)} disabled={adding} className="btn-accent flex-1 py-2.5 text-sm disabled:opacity-50">
+                {adding ? tr('Working…') : dup ? tr('Add anyway') : tr('Add to library')}
+              </button>
+            </div>
           </div>
         </div>
       )}

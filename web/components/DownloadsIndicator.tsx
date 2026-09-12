@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -36,7 +37,7 @@ export function DownloadsIndicator() {
   });
 
   const jobs = data?.content ?? [];
-  const active = jobs.filter((j) => j.status === 'downloading');
+  const active = jobs.filter((j) => j.status === 'downloading' || j.status === 'queued' || j.status === 'paused');
   const failed = jobs.filter((j) => j.status === 'error');
   // Nothing to say when nothing is happening. A finished download ages out on the server, so this does not
   // linger after the fact; a failed one stays until dismissed, because it is the only record of the failure.
@@ -58,10 +59,10 @@ export function DownloadsIndicator() {
           {[...active, ...failed].map((j) => (
             <div key={j.folder} className="border-b border-ink-700/60 py-2 last:border-0">
               <p className="truncate text-xs font-medium text-fog-100">{j.title}</p>
-              {j.status === 'downloading' ? (
+              {j.status === 'downloading' || j.status === 'queued' || j.status === 'paused' ? (
                 <>
                   <div className="mt-1.5"><ProgressBar value={j.total ? j.done / j.total : 0.02} /></div>
-                  <p className="mt-1 text-[11px] tabular-nums text-fog-500">{j.done}/{j.total}</p>
+                  <p className="mt-1 text-[11px] tabular-nums text-fog-500">{tr(j.status)} · {j.done}/{j.total}</p>
                 </>
               ) : (
                 <div className="mt-1 flex items-start gap-2">
@@ -75,6 +76,9 @@ export function DownloadsIndicator() {
               )}
             </div>
           ))}
+          <Link href="/queue" onClick={() => setOpen(false)} className="mt-2 block text-center text-xs text-accent hover:underline">
+            {tr('Manage download queue')}
+          </Link>
         </div>
       )}
       <button

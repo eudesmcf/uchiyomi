@@ -69,9 +69,9 @@ test('the two inline lookups are bounded, parallel, and shared with the dialog',
   assert.match(helper, /detailCache\.set/, 'nothing is cached, so the dialog and the add each pay in full');
 
   // Both callers must go through it, or the caching is pointless.
-  assert.match(addFn(), /seriesAndChapters\(src, sourceId\)/, 'add fetches its own copy again');
+  assert.match(addFn(), /seriesAndChapters\(src, sourceId, language\)/, 'add fetches its own copy again');
   const detail = t.slice(t.indexOf("app.get('/api/sources/detail'"), t.indexOf("app.get('/api/sources/detail'") + 900);
-  assert.match(detail, /seriesAndChapters\(src, sourceId\)/, 'detail does not populate the cache the add reads');
+  assert.match(detail, /seriesAndChapters\(src, sourceId, lang\)/, 'detail does not populate the cache the add reads');
 });
 
 test('a failed background download leaves the failure behind; an awaited one does not', () => {
@@ -97,4 +97,17 @@ test('a finished job ages out, a failed one waits to be dismissed', () => {
   assert.match(sweep, /status === 'done'/, 'the sweep does not distinguish finished from failed');
   assert.doesNotMatch(sweep, /status === 'error'/, 'a failure is being swept away before it can be read');
   assert.match(t, /app\.delete\('\/api\/sources\/jobs\/:folder'/, 'nothing can dismiss a finished job');
+});
+
+test('library-only additions persist metadata without requiring chapters or creating a job', () => {
+  const fn = addFn();
+  const libraryOnly = fn.indexOf('if (opts.libraryOnly)');
+  const noChapters = fn.indexOf("if (!chapters.length)");
+  assert.ok(libraryOnly > 0, 'library-only mode is missing');
+  assert.ok(noChapters > libraryOnly, 'library-only mode must work before the no-chapters guard');
+  const branch = fn.slice(libraryOnly, noChapters);
+  assert.match(branch, /newSeriesId\(\)/, 'library-only mode does not create library metadata');
+  assert.match(branch, /source_language/, 'library-only mode does not persist the source language');
+  assert.match(branch, /chapters:\s*0/, 'library-only mode does not return zero chapters');
+  assert.doesNotMatch(branch, /jobs\.set/, 'library-only mode unexpectedly creates a download job');
 });

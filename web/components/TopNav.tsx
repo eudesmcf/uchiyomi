@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Lockup } from './Brand';
-import { IcHome, IcGrid, IcSearch, IcRefresh, IcBell, IcSparkle, IcPlus, IcBookmark } from './icons';
+import { IcHome, IcGrid, IcSearch, IcRefresh, IcBell, IcSparkle, IcPlus, IcBookmark, IcDownload } from './icons';
 import { triggerRefresh } from '@/lib/refresh';
 import { api } from '@/lib/api';
 import { useAuth, canDownload } from '@/lib/auth';
@@ -15,13 +15,14 @@ import { keys, t as tr } from '@/lib/i18n';
 // `keys()` is the identity function; it exists so these reach the translation extractor, which
 // cannot see a label rendered as `tr(label)`. This nav shipped untranslated once already.
 // See lib/i18n.ts.
-const NAV_LABELS = keys('Home', 'Library', 'Browse', 'Lists', 'Discover');
+const NAV_LABELS = keys('Home', 'Library', 'Browse', 'Lists', 'Discover', 'Download queue');
 const links = [
   { href: '/', label: NAV_LABELS[0], Icon: IcHome, match: (p: string) => p === '/' },
   { href: '/library', label: NAV_LABELS[1], Icon: IcGrid, match: (p: string) => p.startsWith('/library') || p.startsWith('/series') },
   { href: '/browse', label: NAV_LABELS[2], Icon: IcSparkle, match: (p: string) => p.startsWith('/browse') },
   { href: '/collections', label: NAV_LABELS[3], Icon: IcBookmark, match: (p: string) => p.startsWith('/collection') },
   { href: '/discover', label: NAV_LABELS[4], Icon: IcPlus, match: (p: string) => p.startsWith('/discover') },
+  { href: '/queue', label: NAV_LABELS[5], Icon: IcDownload, match: (p: string) => p.startsWith('/queue') },
 ];
 
 export function TopNav({ onSearchFocus }: { onSearchFocus?: () => void }) {

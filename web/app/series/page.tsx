@@ -13,7 +13,7 @@ import { SeriesCard } from '@/components/cards';
 import { useToast } from '@/components/Toast';
 import { ConfirmDialog, Modal, msgOf } from '@/components/ConfirmDialog';
 import { useAuth, canDownload } from '@/lib/auth';
-import { IcChevronLeft, IcHeart, IcStar, IcPlay, IcDownload, IcCheck, IcTrash, IcSliders } from '@/components/icons';
+import { IcChevronLeft, IcHeart, IcStar, IcPlay, IcDownload, IcCheck, IcTrash, IcSliders, IcGrid } from '@/components/icons';
 import { t as tr } from '@/lib/i18n';
 import { FindMissingDialog } from '@/components/FindMissingDialog';
 
@@ -207,7 +207,7 @@ function SeriesEditModal({ id, series, onClose, onSaved }: { id: string; series:
             <input type="checkbox" checked={autoUpdate} onChange={(e) => toggleAuto(e.target.checked)} className="size-4 shrink-0 accent-accent" />
           </label>
           <button onClick={checkNow} disabled={checking} className="mt-2 w-full rounded-full border border-ink-700 py-2 text-sm text-fog-300 disabled:opacity-50">
-            {checking ? 'Checking\u2026' : 'Check for new chapters now'}
+            {checking ? tr('Checking…') : tr('Check for new chapters now')}
           </button>
         </div>
         <ArtEditor label="Cover" kind="cover" busy={busy} onUpload={onUpload} onSetUrl={onSetUrl} onReset={onReset} />
@@ -422,6 +422,7 @@ function ChapterEditModal({ book, onClose, onSaved }: { book: Book; onClose: () 
 function ChapterRow({ book, downloaded, onReader, onToggleDownload, onMark, onEdit }: {
   book: Book;
   downloaded: boolean;
+  serverDownloaded?: boolean;
   onReader: () => void;
   onToggleDownload: () => Promise<void>;
   onMark: (mode: 'read' | 'unread' | 'previous') => void;
@@ -440,9 +441,16 @@ function ChapterRow({ book, downloaded, onReader, onToggleDownload, onMark, onEd
           <Img src={img.bookThumb(book.id)} alt="" className="h-full w-full" />
           {state === 'reading' && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />}
         </div>
-        <span className={`h-2 w-2 shrink-0 rounded-full ${state === 'read' ? 'bg-ink-600' : state === 'reading' ? 'bg-accent' : 'bg-accent/40'}`} />
+        <span className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full ${state === 'read' ? 'bg-emerald-500 text-ink-950' : state === 'reading' ? 'bg-accent' : 'bg-accent/40'}`} aria-label={state === 'read' ? tr('Read') : undefined}>
+          {state === 'read' && <IcCheck width={10} height={10} strokeWidth={3} />}
+        </span>
         <div className="min-w-0">
-          <p className={`truncate text-sm ${state === 'read' ? 'text-fog-500' : 'text-fog-100'}`}>{chapterLabel(book)}</p>
+          <p className={`flex items-center gap-1.5 truncate text-sm ${state === 'read' ? 'text-fog-500' : 'text-fog-100'}`}>
+            <span className="truncate">{chapterLabel(book)}</span>
+          </p>
+          {book.downloaded === false && !downloaded && <p className={`text-[11px] ${book.downloadStatus === 'error' ? 'text-amber-300' : 'text-fog-500'}`}>
+            {book.downloadStatus === 'error' ? tr('Download error') : tr('Pending download')}
+          </p>}
           {state === 'reading' && rp && (
             <p className="text-[11px] text-accent">page {rp.page}/{book.media.pagesCount}</p>
           )}
@@ -458,10 +466,10 @@ function ChapterRow({ book, downloaded, onReader, onToggleDownload, onMark, onEd
           try { await onToggleDownload(); } catch {}
           setBusy(false);
         }}
-        className={`grid h-9 w-9 place-items-center rounded-full border ${downloaded ? 'border-accent/40 text-accent' : 'border-ink-700 text-fog-500'}`}
-        aria-label={downloaded ? 'Remove download' : 'Download'}
+        className={`grid h-9 w-9 place-items-center rounded-full border ${downloaded || book.downloaded ? 'border-sky-400/45 text-sky-300' : 'border-ink-700 text-fog-500'}`}
+        aria-label={downloaded || book.downloaded ? tr('Downloaded') : tr('Download')}
       >
-        {busy ? <span className="text-[10px] font-semibold text-accent">…</span> : downloaded ? <IcCheck width={16} height={16} /> : <IcDownload width={16} height={16} />}
+        {busy ? <span className="text-[10px] font-semibold text-accent">…</span> : <IcDownload width={16} height={16} />}
       </button>
       <div className="relative shrink-0">
         <button onClick={() => setMenu((m) => !m)} aria-label={tr('Chapter actions')}
@@ -474,14 +482,14 @@ function ChapterRow({ book, downloaded, onReader, onToggleDownload, onMark, onEd
             <div className="absolute right-0 top-10 z-30 w-48 overflow-hidden rounded-xl border border-ink-700 bg-ink-900 shadow-lift">
               <button onClick={() => { setMenu(false); onMark(rp?.completed ? 'unread' : 'read'); }}
                 className="block w-full px-3.5 py-2.5 text-start text-xs text-fog-200 hover:bg-ink-800">
-                {rp?.completed ? 'Mark unread' : 'Mark read'}
+                {rp?.completed ? tr('Mark unread') : tr('Mark read')}
               </button>
               <button onClick={() => { setMenu(false); onMark('previous'); }}
                 className="block w-full px-3.5 py-2.5 text-start text-xs text-fog-200 hover:bg-ink-800">{tr('Mark previous as read')}</button>
               {onEdit && (
                 <button onClick={() => { setMenu(false); onEdit(); }}
                   className="block w-full border-t border-ink-800 px-3.5 py-2.5 text-start text-xs text-fog-200 hover:bg-ink-800">
-                  Edit number &amp; title
+                  {tr('Edit number & title')}
                 </button>
               )}
             </div>
@@ -503,6 +511,7 @@ function SeriesInner() {
   const [collecting, setCollecting] = useState(false);
   const [findingMissing, setFindingMissing] = useState(false);
   const [asc, setAsc] = useState(true);
+  const [chapterView, setChapterView] = useState<'grid' | 'list'>('list');
   const [downloaded, setDownloaded] = useState<Set<string>>(new Set());
   const [showSummary, setShowSummary] = useState(false);
   const [downloadingAll, setDownloadingAll] = useState(false);
@@ -525,6 +534,12 @@ function SeriesInner() {
     listDownloads().then((d) => setDownloaded(new Set(d.filter((c) => c.seriesId === id).map((c) => c.bookId))));
   }, [id]);
 
+  useEffect(() => {
+    if (!books) return;
+    // The server-side archive state is independent from this device's offline cache. It is used only as
+    // the catalog check/status; the existing download button continues to control offline storage.
+  }, [books]);
+
   // ambient cover-art theming
   useEffect(() => {
     applyCover(series?.color);
@@ -538,12 +553,18 @@ function SeriesInner() {
 
   const resumeBook = useMemo(() => {
     const c = books?.content ?? [];
-    return c.find((b) => !b.readProgress?.completed) || c[0];
+    // Prefer the unfinished chapter that has a saved page. If the last completed chapter
+    // was the most recent activity, continue with the next unread chapter instead.
+    const partial = c.find((b) => b.readProgress && !b.readProgress.completed && b.readProgress.page > 0);
+    if (partial) return partial;
+    const lastCompleted = c.reduce((last, b, i) => b.readProgress?.completed ? i : last, -1);
+    return c.slice(lastCompleted + 1).find((b) => !b.readProgress?.completed) || c.find((b) => !b.readProgress?.completed) || c[0];
   }, [books]);
 
-  const inProgress = books?.content.some((b) => b.readProgress && !b.readProgress.completed);
+  const hasStarted = books?.content.some((b) => !!b.readProgress) ?? false;
 
-  const back = () => (typeof window !== 'undefined' && window.history.length > 1 ? router.back() : router.push('/'));
+  // A series page always returns to the library; it must not depend on the discovery-page history.
+  const back = () => router.push('/library');
 
   const toggleFav = async () => {
     const next = !fav;
@@ -607,23 +628,14 @@ function SeriesInner() {
 
   const downloadAll = async () => {
     if (downloadingAll || !books) return;
-    const todo = books.content.filter((b) => !downloaded.has(b.id));
-    if (!todo.length) { toast('Everything is already downloaded', 'success'); return; }
     setDownloadingAll(true);
-    toast(`Downloading ${todo.length} chapters…`);
-    let done = 0;
-    for (const b of todo) {
-      try {
-        await downloadChapter(b.id);
-        setDownloaded((s) => new Set(s).add(b.id));
-        done++;
-      } catch {
-        toast('Stopped — device storage may be full', 'error');
-        break;
-      }
-    }
+    try {
+      await api(`/api/sources/series/${id}/download`, { method: 'POST' });
+      qc.invalidateQueries({ queryKey: ['source-jobs'] });
+      qc.invalidateQueries({ queryKey: ['series-books', id] });
+      toast(tr('Added to download queue'), 'success');
+    } catch (e) { toast(msgOf(e, tr('Could not start the download')), 'error'); }
     setDownloadingAll(false);
-    if (done) toast(`Saved ${done} chapters offline`, 'success');
   };
 
   const meta = series?.metadata;
@@ -665,14 +677,14 @@ function SeriesInner() {
   const Actions = (
     <div className="mt-4 flex flex-col gap-2">
       <button onClick={() => resumeBook && router.push(`/reader/?book=${resumeBook.id}`)} className="btn-accent w-full">
-        <IcPlay width={18} height={18} /> {inProgress ? 'Continue' : 'Start reading'}
+        <IcPlay width={18} height={18} /> {tr(hasStarted ? 'Continue Reading' : 'Start reading')}
       </button>
       <div className="flex gap-2">
         <button onClick={toggleFav} className={`flex flex-1 items-center justify-center gap-2 rounded-full border py-3 text-sm ${fav ? 'border-accent/50 bg-accent-soft text-accent' : 'border-ink-700 text-fog-300'}`}>
           <IcHeart width={18} height={18} fill={fav ? 'currentColor' : 'none'} stroke={fav ? 'none' : 'currentColor'} /> {fav ? 'Saved' : 'Favorite'}
         </button>
         <button onClick={downloadAll} disabled={downloadingAll} className="flex flex-1 items-center justify-center gap-2 rounded-full border border-ink-700 py-3 text-sm text-fog-300 disabled:opacity-50">
-          <IcDownload width={18} height={18} /> {downloadingAll ? 'Saving…' : 'Download all'}
+          <IcDownload width={18} height={18} /> {downloadingAll ? tr('Adding…') : tr('Download all')}
         </button>
       </div>
       <button onClick={() => setCollecting(true)} className="flex items-center justify-center gap-2 rounded-full border border-ink-700 py-2.5 text-sm text-fog-300">
@@ -731,18 +743,47 @@ function SeriesInner() {
     </p>
   );
 
+  const copySourceUrl = async (url: string, label: string) => {
+    try { await navigator.clipboard.writeText(url); toast(tr('{label} copied', { label }), 'success'); }
+    catch { toast(tr('Could not copy link'), 'error'); }
+  };
+  const SourceLinks = (series?.chapterListUrl || series?.sourceUrl) && (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-800 bg-ink-900/35 px-3 py-2 text-xs text-fog-400">
+      {series?.sourceName && <span>{series.sourceName}{series.sourceLanguage ? ` · ${series.sourceLanguage}` : ''}</span>}
+      {series?.chapterListUrl && <div className="flex items-center gap-1">
+        <a href={series.chapterListUrl} target="_blank" rel="noreferrer" className="chip grid h-8 w-8 place-items-center p-0" title={tr('Open feed URL')} aria-label={tr('Open feed URL')}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 3h7v7M10 14 21 3M21 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h6" /></svg>
+        </a>
+        <button onClick={() => copySourceUrl(series.chapterListUrl!, tr('Feed URL'))} className="chip grid h-8 w-8 place-items-center p-0" title={tr('Copy feed URL')} aria-label={tr('Copy feed URL')}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M15 9V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h4" /></svg>
+        </button>
+      </div>}
+      {series?.sourceUrl && <div className="flex items-center gap-1">
+        <a href={series.sourceUrl} target="_blank" rel="noreferrer" className="chip grid h-8 w-8 place-items-center p-0" title={tr('Open work link')} aria-label={tr('Open work link')}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M14 3h7v7M10 14 21 3M21 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h6" /></svg>
+        </a>
+        <button onClick={() => copySourceUrl(series.sourceUrl!, tr('Work link'))} className="chip grid h-8 w-8 place-items-center p-0" title={tr('Copy work link')} aria-label={tr('Copy work link')}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M15 9V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h4" /></svg>
+        </button>
+      </div>}
+    </div>
+  );
+
   const Chapters = (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2">
         <h2 className="font-display text-lg font-semibold">{tr('Chapters')}</h2>
         <div className="flex items-center gap-1.5">
           <button onClick={markAllRead} className="chip text-xs"><IcCheck width={14} height={14} />{tr('Mark all read')}</button>
+          <button onClick={() => setChapterView((v) => v === 'grid' ? 'list' : 'grid')} className="chip text-xs" title={chapterView === 'grid' ? tr('List view') : tr('Grid view')}>
+            <IcGrid width={14} height={14} /> {chapterView === 'grid' ? tr('List') : tr('Cards')}
+          </button>
           <button onClick={() => setAsc((a) => !a)} className="chip text-xs">
             <IcSliders width={14} height={14} /> {asc ? 'Oldest' : 'Newest'}
           </button>
         </div>
       </div>
-      <div className="lg:grid lg:gap-x-8 lg:[grid-template-columns:repeat(auto-fill,minmax(250px,1fr))]">
+      <div className={chapterView === 'grid' ? 'lg:grid lg:gap-x-8 lg:[grid-template-columns:repeat(auto-fill,minmax(250px,1fr))]' : 'max-w-4xl'}>
         {chapters.map((b) => (
           <ChapterRow key={b.id} book={b} downloaded={downloaded.has(b.id)}
             onReader={() => router.push(`/reader/?book=${b.id}`)} onToggleDownload={() => toggleDownload(b.id)}
@@ -805,6 +846,7 @@ function SeriesInner() {
         <div className="mt-7 flex flex-col gap-4 lg:mt-4">
           {Genres}
           {Summary}
+          {SourceLinks}
           {Chapters}
         </div>
       </div>

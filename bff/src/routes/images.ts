@@ -16,6 +16,7 @@ import { q, one } from '../lib/db';
 import { viewCtxFor, visibleBookFile, seriesVisible, SYSTEM_CTX, type ViewCtx } from '../lib/visibility';
 import { artFile } from '../lib/seriesArt';
 import { HERO_FRAMES, heroFit, type HeroAr } from '../lib/heroFrame';
+import { fetchRemoteImage, remotePageUrls, remoteSource, resolveRemoteChapter } from '../lib/remoteChapter';
 
 async function fetchUpstream(path: string): Promise<Buffer> {
   const res = await komgaImage(path);
@@ -383,6 +384,13 @@ export default async function imageRoutes(app: FastifyInstance) {
   app.get('/img/books/:id/thumb', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (id.startsWith('b_')) return serveLibBookThumb(req, reply, id);
+    if (id.startsWith('remote_')) {
+      if (!(await resolveRemoteChapter(vc(req), id))) return reply.code(404).send({ error: 'not_found' });
+      return serveImage(req, reply, `remote-book-placeholder:${id}`, async () => ({
+        buffer: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600"><rect width="400" height="600" fill="#111018"/><path d="M120 260h160M120 300h160M120 340h110" stroke="#4a3b82" stroke-width="12" stroke-linecap="round"/><circle cx="200" cy="170" r="44" fill="#271d49" stroke="#7c5cff" stroke-width="6"/><text x="200" y="470" fill="#918ba8" font-family="sans-serif" font-size="22" text-anchor="middle">Capítulo remoto</text></svg>`),
+        contentType: 'image/svg+xml',
+      }));
+    }
     return serveImage(req, reply, `book-thumb:${id}:webp:400`, async () => {
       const input = await fetchUpstream(komga.bookThumbPath(id));
       const buffer = await sharp(input).resize({ width: 400, withoutEnlargement: true }).webp({ quality: 72 }).toBuffer();
@@ -398,6 +406,24 @@ export default async function imageRoutes(app: FastifyInstance) {
     if (!Number.isInteger(pageNo) || pageNo < 1) return reply.code(400).send({ error: 'bad_page' });
     const w = Number((req.query as Record<string, string>).w);
     if (id.startsWith('b_')) return serveLibBookPage(req, reply, id, pageNo, w);
+    if (id.startsWith('remote_')) {
+      const remote = await resolveRemoteChapter(vc(req), id);
+      if (!remote) return reply.code(404).send({ error: 'not_found' });
+      let urls: string[];
+      try { urls = await remotePageUrls(remote); }
+      catch (e: any) { return reply.code(Number(e?.statusCode) >= 400 ? Number(e.statusCode) : 502).send({ error: 'remote_pages_unavailable' }); }
+      if (!urls[pageNo - 1]) return reply.code(404).send({ error: 'no_page' });
+      return serveImage(req, reply, `remote-page:${id}:${pageNo}${w ? `:w${w}` : ''}`, async () => {
+        const source = remoteSource(remote);
+        if (!source) throw Object.assign(new Error('source_not_available'), { statusCode: 503 });
+        const input = await fetchRemoteImage(urls[pageNo - 1], source);
+        if (w && Number.isInteger(w) && w >= 64 && w <= 2000) {
+          const buffer = await sharp(input.buffer).resize({ width: w, withoutEnlargement: true }).webp({ quality: 74 }).toBuffer();
+          return { buffer, contentType: 'image/webp' };
+        }
+        return input;
+      });
+    }
 
     if (w && Number.isInteger(w) && w >= 64 && w <= 2000) {
       return serveImage(req, reply, `page:${id}:${pageNo}:w${w}`, async () => {

@@ -39,6 +39,8 @@ export interface DownloadInput {
   seriesFolder: string; // relative "<source>/<title>" (existing lib_series.folder, or new)
   chapter: SourceChapter;
   meta?: Partial<SourceSeries> & { series?: string };
+  /** Checked between page batches so queue pause/cancel does not abandon an in-flight HTTP request. */
+  shouldContinue?: () => Promise<boolean> | boolean;
 }
 
 // Politeness limits, applied per source. Adding a series and importing hundreds both fan out through here,
@@ -55,6 +57,7 @@ const DL_MIN_GAP_MS = Number(process.env.DOWNLOAD_MIN_GAP_MS || 1200);
  * costs about 30s on a 120-page chapter, against a 75-minute cooldown for going too fast.
  */
 const DL_PAGE_GAP_MS = Number(process.env.DOWNLOAD_PAGE_GAP_MS || 250);
+const PAGE_CONCURRENCY = 4;
 /** Ceiling for the adaptive slow-down after a 429, so a resume cannot crawl indefinitely. */
 const MAX_PAGE_GAP_MS = 2000;
 /** How many times a chapter may wait out a 429 and resume before we accept the source is refusing. */
@@ -199,9 +202,13 @@ async function fetchChapter(
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   let gap = DL_PAGE_GAP_MS;
 
-  for (let i = 0; i < urls.length; i++) {
-    if (i && gap) await sleep(gap);
-    await fetchPage(urls[i], i);
+  for (let start = 0; start < urls.length; start += PAGE_CONCURRENCY) {
+    if (input.shouldContinue && !(await input.shouldContinue())) {
+      throw Object.assign(new Error('download cancelled'), { cancelled: true });
+    }
+    const batch = urls.slice(start, start + PAGE_CONCURRENCY);
+    if (start && gap) await sleep(gap);
+    await Promise.all(batch.map((url, offset) => fetchPage(url, start + offset)));
     // Stop the moment the site says slow down. Carrying on collects ninety more refusals, turns a pause into
     // a "12 of 108 pages" failure, and earns a cooldown for behaviour that was ours.
     if (retryAfterMs) break;
@@ -223,6 +230,9 @@ async function fetchChapter(
    * comes with the remedy attached, and discarding that instruction is not politeness, it is deafness.
    */
   for (let round = 0; round < MAX_RESUMES; round++) {
+    if (input.shouldContinue && !(await input.shouldContinue())) {
+      throw Object.assign(new Error('download cancelled'), { cancelled: true });
+    }
     const gaps = page.map((b, i) => (b ? -1 : i)).filter((i) => i >= 0);
     if (!gaps.length) break;
     if (gaps.length === urls.length && !retryAfterMs) break; // a silent refusal: do not ask twice
@@ -234,9 +244,13 @@ async function fetchChapter(
     } else if (round) {
       break; // a stable shortfall with no 429: the pages are not there, and one retry was enough to know
     }
-    for (const i of gaps) {
-      if (gap) await sleep(gap);
-      await fetchPage(urls[i], i);
+    for (let start = 0; start < gaps.length; start += PAGE_CONCURRENCY) {
+      if (input.shouldContinue && !(await input.shouldContinue())) {
+        throw Object.assign(new Error('download cancelled'), { cancelled: true });
+      }
+      if (start && gap) await sleep(gap);
+      const batch = gaps.slice(start, start + PAGE_CONCURRENCY);
+      await Promise.all(batch.map((i) => fetchPage(urls[i], i)));
       if (retryAfterMs) break;
     }
   }
