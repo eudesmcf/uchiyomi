@@ -3,6 +3,8 @@
 import { q, one } from './db';
 import { cbzPageDims, LIBRARY_ROOT, persistScan } from './library';
 import { ViewCtx, Params, visible, browsable, ADULT_RATING } from './visibility';
+import { remoteBookId, remotePageUrls, resolveRemoteChapter } from './remoteChapter';
+import { getSource } from './sources';
 
 interface Page<T> { content: T[]; totalElements: number; totalPages: number; number: number; size: number; first: boolean; last: boolean }
 function page<T>(content: T[], total: number, p: number, size: number): Page<T> {
@@ -10,7 +12,7 @@ function page<T>(content: T[], total: number, p: number, size: number): Page<T> 
   return { content, totalElements: total, totalPages, number: p, size, first: p <= 0, last: p >= totalPages - 1 };
 }
 
-const SERIES_COLS = 'id, title, summary, status, genres, author, age_rating, books_count, cover_book_id, web, created_at, latest_mtime, auto_update, library_id, library_pinned';
+const SERIES_COLS = 'id, title, summary, status, genres, author, age_rating, books_count, cover_book_id, web, created_at, latest_mtime, auto_update, library_id, library_pinned, source_language, source_id, source_series_id';
 
 /**
  * The one place a series is read from.
@@ -31,8 +33,9 @@ const seriesSrcWith = (gate: Gate, ctx: ViewCtx, p: Params, alias: string) => `(
          COALESCE(o.status, s.status) AS status, COALESCE(o.genres, s.genres) AS genres,
          COALESCE(o.author, s.author) AS author,
          COALESCE(o.age_rating, s.age_rating) AS age_rating,
-         s.books_count, s.cover_book_id, s.web, s.created_at, s.latest_mtime,
-         s.auto_update, s.library_id, s.library_pinned
+         GREATEST(s.books_count, COALESCE((SELECT count(*) FROM source_chapters sc WHERE sc.series_id = s.id), 0)) AS books_count,
+         s.cover_book_id, s.web, s.created_at, s.latest_mtime,
+         s.auto_update, s.library_id, s.library_pinned, s.source_language, s.source_id, s.source_series_id
     FROM lib_series s LEFT JOIN series_overrides o ON o.series_id = s.id
    WHERE ${gate('s', ctx, p)}
 ) ${alias}`;
@@ -78,6 +81,7 @@ function seriesDto(r: any) {
   const genres: string[] = r.genres ?? [];
   const summary: string = r.summary ?? '';
   const count: number = r.books_count ?? 0;
+  const source = r.source_id ? getSource(r.source_id) : null;
   return {
     id: r.id,
     libraryId: r.library_id ?? 'lib',
@@ -100,11 +104,15 @@ function seriesDto(r: any) {
       genres,
       tags: [],
       ageRating: r.age_rating ?? null,
-      language: 'en',
+      language: r.source_language || 'en',
     },
     booksMetadata: { summary, genres, tags: [] },
     // whether the scheduled updater pulls new chapters for this series; settable from the series page
     autoUpdate: r.auto_update !== false,
+    sourceUrl: r.web ?? null,
+    chapterListUrl: source?.chapterListUrl?.(r.source_series_id, r.source_language || undefined) ?? null,
+    sourceName: source?.name ?? null,
+    sourceLanguage: r.source_language ?? null,
   };
 }
 
@@ -122,8 +130,14 @@ function bookDto(r: any) {
     seriesTitle: r.series_title ?? '',
     name: r.title,
     number: num,
-    media: { pagesCount: r.pages ?? 0, mediaType: 'application/vnd.comicbook+zip', status: 'READY' },
+    media: { pagesCount: r.pages ?? 0, mediaType: 'application/vnd.comicbook+zip', status: r.downloaded === false ? 'PENDING' : 'READY' },
     metadata: { title: r.title, number: String(num), numberSort: num, summary: '', releaseDate: released },
+    downloaded: r.downloaded !== false,
+    downloadStatus: r.download_status || (r.downloaded === false ? 'pending' : 'downloaded'),
+    remote: r.remote === true,
+    sourceChapterId: r.source_chapter_id ?? null,
+    availableOnline: r.available_online === true || r.remote === true,
+    error: r.error ?? null,
   };
 }
 
@@ -419,12 +433,13 @@ export const owned = {
     const dir = /desc/i.test(sort) ? 'DESC' : 'ASC';
     const ps = new Params();
     const ssrc = seriesSrc(ctx, ps);
-    const st = (await one<{ title: string }>(`SELECT title FROM ${ssrc} WHERE id = ${ps.add(id)}`, ps.values as any[]))?.title ?? '';
+    const st = (await one<{ title: string }>(`SELECT title FROM ${ssrc} WHERE id = ${ps.add(id)}`, ps.values as any[]))?.title;
+    if (!st) throw Object.assign(new Error('series not found'), { statusCode: 404 });
 
     const pc = new Params();
     const bsrcCount = booksSrc(ctx, pc);
     const t = (await one<{ c: number }>(
-      `SELECT count(*)::int AS c FROM ${bsrcCount} WHERE series_id = ${pc.add(id)}`, pc.values as any[],
+      `SELECT GREATEST(count(*)::int, COALESCE((SELECT count(*)::int FROM source_chapters WHERE series_id = ${pc.add(id)}), 0)) AS c FROM ${bsrcCount} WHERE series_id = ${pc.add(id)}`, pc.values as any[],
     ))?.c ?? 0;
 
     const p = new Params();
@@ -433,7 +448,17 @@ export const owned = {
       `SELECT * FROM ${bsrc} WHERE series_id = ${p.add(id)} ORDER BY number ${dir}, file ${dir} LIMIT ${p.add(size)} OFFSET ${p.add(pg * size)}`,
       p.values as any[],
     );
-    return page(rows.map((r) => bookDto({ ...r, series_title: st })), t, pg, size);
+    const remote = await q(`SELECT source_chapter_id, number, title, pages, published_at, status, error FROM source_chapters WHERE series_id = $1 ORDER BY number ${dir}`, [id]);
+    const localNumbers = new Set(rows.map((r: any) => Number(r.number)));
+    const placeholders = remote.filter((r: any) => !localNumbers.has(Number(r.number))).map((r: any) => ({
+      id: remoteBookId(id, String(r.source_chapter_id)),
+      series_id: id, series_title: st, number: r.number, title: r.title || `Chapter ${r.number}`, pages: r.pages || 0,
+      published_at: r.published_at, downloaded: false, download_status: r.status || 'pending', error: r.error,
+      source_chapter_id: r.source_chapter_id, remote: true, available_online: true,
+    }));
+    const merged = [...rows.map((r: any) => ({ ...r, series_title: st, downloaded: true })), ...placeholders]
+      .sort((a: any, b: any) => dir === 'ASC' ? Number(a.number) - Number(b.number) : Number(b.number) - Number(a.number));
+    return page(merged.slice(pg * size, pg * size + size).map((r: any) => bookDto(r)), t, pg, size);
   },
 
   book: async (ctx: ViewCtx, id: string) => {
@@ -443,7 +468,16 @@ export const owned = {
       `SELECT b.*, ${SERIES_TITLE_SQL} AS series_title FROM ${bsrc} ${SERIES_TITLE_JOIN.replace('%col%', 'b.series_id')} WHERE b.id = ${p.add(id)}`,
       p.values as any[],
     );
-    if (!r) throw Object.assign(new Error('book not found'), { statusCode: 404 });
+    if (!r) {
+      const remote = await resolveRemoteChapter(ctx, id);
+      if (remote) return bookDto({
+        id, series_id: remote.series_id, series_title: remote.series_title, number: remote.number,
+        title: remote.title || `Chapter ${remote.number}`, pages: remote.pages || 0,
+        published_at: remote.published_at, downloaded: false, download_status: remote.status,
+        source_chapter_id: remote.source_chapter_id, remote: true, available_online: true, error: remote.error,
+      });
+      throw Object.assign(new Error('book not found'), { statusCode: 404 });
+    }
     return bookDto(r);
   },
 
@@ -455,7 +489,12 @@ export const owned = {
       `SELECT file, root, page_dims FROM ${bsrc} WHERE id = ${p.add(id)}`,
       p.values as any[],
     );
-    if (!r) return [];
+    if (!r) {
+      const remote = await resolveRemoteChapter(ctx, id);
+      if (!remote) return [];
+      const urls = await remotePageUrls(remote);
+      return urls.map((_, i) => ({ number: i + 1, fileName: `page-${i + 1}`, mediaType: 'image/jpeg', width: null, height: null, sizeBytes: null }));
+    }
     if (Array.isArray(r.page_dims) && r.page_dims.length) {
       return r.page_dims.map((pd, i) => ({ number: i + 1, fileName: pd.name, mediaType: mediaType(pd.name), width: pd.width ?? null, height: pd.height ?? null, sizeBytes: null }));
     }

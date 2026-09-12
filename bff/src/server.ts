@@ -5,6 +5,8 @@ import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import compress from '@fastify/compress';
+import { networkInterfaces } from 'os';
+import qrcode from 'qrcode';
 import { env } from './env';
 import { pool } from './lib/db';
 import { runtime } from './lib/runtime';
@@ -131,6 +133,210 @@ async function main() {
   // serves the app shell for any unknown path, and a route added after it would still work, but its
   // static assets under /api/docs/ would not be found by the UI in the same way. Unauthenticated on
   // purpose -- every route name is already public in docs/api.md and the spec holds no secrets.
+  app.get('/qr', async (_req, reply) => {
+    const nets = networkInterfaces();
+    const ips: { name: string; address: string; isPhysical: boolean }[] = [];
+
+    for (const name of Object.keys(nets)) {
+      const isVirtual = /vEthernet|WSL|VirtualBox|VMware|Hyper-V|Loopback/i.test(name);
+      for (const net of nets[name] || []) {
+        if (
+          net.family === 'IPv4' &&
+          !net.internal &&
+          !net.address.startsWith('169.254.') &&
+          !net.address.startsWith('127.')
+        ) {
+          ips.push({
+            name,
+            address: net.address,
+            isPhysical: !isVirtual && (net.address.startsWith('192.168.') || net.address.startsWith('10.') || net.address.startsWith('172.16.'))
+          });
+        }
+      }
+    }
+
+    ips.sort((a, b) => (b.isPhysical ? 1 : 0) - (a.isPhysical ? 1 : 0));
+
+    const port = env.PORT;
+    const localUrl = `http://localhost:${port}`;
+
+    const qrItems = await Promise.all(
+      ips.map(async (item) => {
+        const url = `http://${item.address}:${port}`;
+        const svg = await qrcode.toString(url, {
+          type: 'svg',
+          margin: 4,
+          errorCorrectionLevel: 'H',
+          color: { dark: '#000000', light: '#ffffff' }
+        });
+        return { name: item.name, address: item.address, url, svg };
+      })
+    );
+
+    if (qrItems.length === 0) {
+      const svg = await qrcode.toString(localUrl, { type: 'svg', margin: 4, errorCorrectionLevel: 'H' });
+      qrItems.push({ name: 'Localhost', address: '127.0.0.1', url: localUrl, svg });
+    }
+
+    const cardsHtml = qrItems.map((item) => `
+      <div style="margin-bottom: 1.5rem;">
+        <div class="interface-label">${item.name} (${item.address})</div>
+        <div class="qr-container">
+          ${item.svg}
+        </div>
+        <div class="url-box">${item.url}</div>
+      </div>
+    `).join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Uchiyomi - QR Code Rede Local</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card: #121827;
+      --border: #1f293d;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --green: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      min-height: 100vh;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 2rem;
+      max-width: 460px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--green);
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 1rem;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      background: var(--green);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--green);
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+    p {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin-bottom: 1.25rem;
+      line-height: 1.4;
+    }
+    .interface-label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .qr-container {
+      background: #ffffff;
+      padding: 1.25rem;
+      border-radius: 0.75rem;
+      display: inline-block;
+      margin-bottom: 0.75rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    }
+    .qr-container svg {
+      display: block;
+      width: 260px;
+      height: 260px;
+      shape-rendering: crispEdges;
+    }
+    .url-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.6rem 0.8rem;
+      font-family: monospace;
+      font-size: 1rem;
+      color: #38bdf8;
+      word-break: break-all;
+    }
+    .btn {
+      display: inline-block;
+      width: 100%;
+      background: var(--accent);
+      color: #ffffff;
+      text-decoration: none;
+      font-weight: 600;
+      padding: 0.75rem 1.25rem;
+      border-radius: 0.5rem;
+      transition: background 0.2s;
+    }
+    .btn:hover {
+      background: var(--accent-hover);
+    }
+    .help-note {
+      margin-top: 1.25rem;
+      padding: 0.75rem;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 0.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: left;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge"><span class="dot"></span> Servidor Ativo</div>
+    <h1>Uchiyomi na Rede Local</h1>
+    <p>Escaneie o QR Code abaixo no celular (conectado ao mesmo Wi-Fi):</p>
+
+    ${cardsHtml}
+
+    <a href="${localUrl}" class="btn">Abrir Uchiyomi neste computador</a>
+
+    <div class="help-note">
+      ⚠️ <strong>Se a pagina nao abrir no celular:</strong><br/>
+      1. Certifique-se de estar no <strong>mesmo Wi-Fi</strong> que este computador.<br/>
+      2. No computador, abra o PowerShell como Administrador e rode:<br/>
+      <code style="color:#38bdf8; display:block; margin-top:4px; word-break:break-all;">New-NetFirewallRule -DisplayName "Uchiyomi 3000" -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow</code>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    return reply.type('text/html').send(html);
+  });
+
   await registerApiDocs(app);
 
   // The web app, when it is packaged into this image. Registered after every API route so a path collision

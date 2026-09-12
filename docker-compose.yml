@@ -1,178 +1,78 @@
-# ┌───────────────────────────────────────────────────────────────────────────┐
-# │  THIS IS THE DEVELOPMENT STACK. It builds both images from source.        │
-# │  To INSTALL Uchiyomi, do not clone the repo -- take one file instead:     │
-# │    curl -O https://raw.githubusercontent.com/AngeloSha/uchiyomi/main/deploy/docker-compose.yml
-# │    docker compose up -d                                                   │
-# │  See README.md -> Install.                                                │
-# └───────────────────────────────────────────────────────────────────────────┘
-# Uchiyomi — self-hosted OLED manga/manhwa reader (bring-your-own CBZ library)
-# services: yomi-db (private Postgres) · yomi-app (the single container, same as the install) ·
-#           yomi-flaresolverr + yomi-suwayomi (optional) · yomi-bff + yomi-web under `--profile split`
+# Uchiyomi, one container.
+#
+#   curl -O https://raw.githubusercontent.com/AngeloSha/uchiyomi/main/deploy/docker-compose.yml
+#   docker compose up -d
+#
+# Then open http://localhost:8080 and create your admin account in the browser. There are no secrets to
+# generate, no config file to edit, and no database to run: Postgres lives inside the container, on a unix
+# socket, in the uchiyomi_data volume. Leave DATABASE_URL unset and that is what you get; set it and the
+# same image talks to a database you run yourself instead (docker-compose.external-db.yml is that layout,
+# ready to use). The two share every other volume, and docs/MIGRATING.md has the move in both directions.
+#
+# The extension engine is still opt-in and still its own container, because it is a JVM. Leave it out and
+# the whole thing is one container plus the Cloudflare solver.
+#
+#   LIBRARY_PATH=/mnt/media/comics   your existing library (default: ./library)
+#   PUID= / PGID=                    run as the user that OWNS your library, so Uchiyomi can rename and
+#                                    delete files in it. `id -u` and `id -g`. Leave both unset and nothing
+#                                    changes: the app runs as uid 10002 and your library is read-only.
+#   WEB_PORT=8080                    the port you open in a browser
+
 services:
-  yomi-db:
-    image: supabase/postgres:15.8.1.085
-    container_name: yomi-db
+  uchiyomi:
+    image: ghcr.io/angelosha/uchiyomi:latest
+    container_name: uchiyomi
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: yomi
-      POSTGRES_USER: yomi
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-uchiyomi}   # internal-only DB (no published port); override in .env for extra safety
-    volumes:
-      - yomi_pgdata:/var/lib/postgresql/data
-    networks:
-      - yomi_internal          # private: only the BFF can reach the DB
-    # NOTE: deliberately NO `ports:` and only on yomi_internal -> unreachable from outside the stack
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U yomi -d yomi"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    labels:
-      - com.centurylinklabs.watchtower.enable=false
-
-  # The two-container split. Still built from source here because its images are still published on
-  # every release -- `docker compose --profile split up -d` brings it back. Not started by default.
-  yomi-bff:
-    profiles: ["split"]
-    build: ./bff
-    image: yomi-bff:prod
-    container_name: yomi-bff
-    restart: unless-stopped
-    env_file: .env
+    # The app finishes the chapter it is writing on SIGTERM (up to 20 s), and then Postgres checkpoints and
+    # stops. Docker's default 10 s would kill the database mid-checkpoint.
+    stop_grace_period: 40s
     environment:
       # Run as the owner of your library so file operations work. Unset = uid 10002, library read-only.
       PUID: ${PUID:-}
       PGID: ${PGID:-}
       NODE_ENV: production
       PORT: "3000"
-      DATABASE_URL: postgres://yomi:${DB_PASSWORD:-uchiyomi}@yomi-db:5432/yomi
-      KOMGA_BASE_URL: ${KOMGA_BASE_URL:-http://komga:25600}
-      KOMGA_API_KEY: ${KOMGA_API_KEY:-}        # only used when LIBRARY_BACKEND=komga
-      JWT_SECRET: ${JWT_SECRET:-}                                 # optional: auto-generated + persisted to /config if empty
-      INITIAL_USER_PASSWORD_HASH_B64: ${INITIAL_USER_PASSWORD_HASH_B64:-}   # optional: first-run web setup creates the admin
-      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8081}   # the split serves on SPLIT_WEB_PORT
-      CACHE_DIR: /cache
-      CACHE_MAX_BYTES: "16106127360"   # 15 GiB image cache cap
-      LIBRARY_ROOT: /library
-      DL_ROOT: /library-dl             # owned, writable download dir (separate from Suwayomi's read library)
-      LIBRARY_BACKEND: ${LIBRARY_BACKEND:-owned}           # Phase-1 cutover: serve from the owned CBZ library, not Komga
-      FLARESOLVERR_URL: http://yomi-flaresolverr:8191   # Cloudflare solver for Cloudflare-protected sources
-      SOURCES_DIR: /sources            # runtime source plugins are loaded from here (none = scraper-free core)
-      CUSTOM_SITES_FILE: /config/sites.json   # admin-added Madara/Manganato sites (Add-a-site form)
-      # Extension engine: a Suwayomi server that runs Mihon/Tachiyomi extensions. Wired up by default;
-      # set SUWAYOMI_URL to an empty string in .env to turn the feature off entirely.
-      SUWAYOMI_URL: ${SUWAYOMI_URL:-http://yomi-suwayomi:4567}
-      SUWAYOMI_USERNAME: ${SUWAYOMI_USERNAME:-}
-      SUWAYOMI_PASSWORD: ${SUWAYOMI_PASSWORD:-}
-      SUWAYOMI_MAX_SOURCES: ${SUWAYOMI_MAX_SOURCES:-25}
-    volumes:
-      - yomi_imgcache:/cache
-      - ${LIBRARY_PATH:-./library}:/library                   # your existing CBZ library (bring-your-own)
-      - yomi_library:/library-dl                             # owned, writable download dir
-      - ${SOURCES_PATH:-./sources}:/sources:ro               # user-supplied source plugins (compiled .js)
-      - yomi_config:/config                                  # writable app config (custom sites list)
-      - ${BACKUP_PATH:-yomi_backups}:/backups                # nightly DB + config backups (see docs/USAGE.md)
-    networks:
-      - yomi_internal            # reach the DB
-      - yomi_app                 # reach the web + flaresolverr
-    expose:
-      - "3000"
-    depends_on:
-      yomi-db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    labels:
-      - com.centurylinklabs.watchtower.enable=false
-
-  yomi-web:
-    profiles: ["split"]
-    build: ./web
-    image: yomi-web:prod
-    container_name: yomi-web
-    restart: unless-stopped
-    expose:
-      - "80"
-    ports:
-      - "${SPLIT_WEB_PORT:-8081}:80"   # split only; WEB_PORT belongs to yomi-app, which stays up alongside it
-    networks:
-      - yomi_app
-    depends_on:
-      - yomi-bff
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    labels:
-      - com.centurylinklabs.watchtower.enable=false
-  # The shipped topology, built from source. `docker compose up -d` gives you the SAME single container the
-  # install ships and the end-to-end tests drive, so a contributor runs what is released.
-  yomi-app:
-    build:
-      context: .
-      dockerfile: Dockerfile.aio
-    image: yomi-app:prod
-    container_name: yomi-app
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      # Run as the owner of your library so file operations work. Unset = uid 10002, library read-only.
-      PUID: ${PUID:-}
-      PGID: ${PGID:-}
-      NODE_ENV: production
-      PORT: "3000"
-      DATABASE_URL: postgres://yomi:${DB_PASSWORD:-uchiyomi}@yomi-db:5432/yomi
-      JWT_SECRET: ${JWT_SECRET:-}                                 # auto-generated + persisted to /config if empty
-      INITIAL_USER_PASSWORD_HASH_B64: ${INITIAL_USER_PASSWORD_HASH_B64:-}
-      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
-      CACHE_DIR: /cache
-      CACHE_MAX_BYTES: "16106127360"   # 15 GiB image cache cap
-      LIBRARY_ROOT: /library
-      DL_ROOT: /library-dl             # owned, writable download dir
+      # No DATABASE_URL: that is the switch. Set one here and the embedded database is not started.
       LIBRARY_BACKEND: ${LIBRARY_BACKEND:-owned}
-      FLARESOLVERR_URL: http://yomi-flaresolverr:8191
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      FLARESOLVERR_URL: http://uchiyomi-flaresolverr:8191
       SOURCES_DIR: /sources
       CUSTOM_SITES_FILE: /config/sites.json
-      SUWAYOMI_URL: ${SUWAYOMI_URL:-http://yomi-suwayomi:4567}
+      # Generated and persisted to /config on first boot when left empty.
+      JWT_SECRET: ${JWT_SECRET:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_NAME: ${OIDC_NAME:-SSO}
+      OIDC_ALLOW_SIGNUP: ${OIDC_ALLOW_SIGNUP:-false}
+      OIDC_LINK_BY_USERNAME: ${OIDC_LINK_BY_USERNAME:-false}
+      OIDC_ADMIN_GROUP: ${OIDC_ADMIN_GROUP:-}
+      # Extension engine (Mihon/Tachiyomi extensions). Set to an empty string to turn it off entirely and
+      # drop the container below; it is a JVM and costs about 800 MB.
+      SUWAYOMI_URL: ${SUWAYOMI_URL:-http://uchiyomi-suwayomi:4567}
       SUWAYOMI_USERNAME: ${SUWAYOMI_USERNAME:-}
       SUWAYOMI_PASSWORD: ${SUWAYOMI_PASSWORD:-}
       SUWAYOMI_MAX_SOURCES: ${SUWAYOMI_MAX_SOURCES:-25}
     volumes:
-      - yomi_imgcache:/cache
-      - ${LIBRARY_PATH:-./library}:/library                   # your existing CBZ library (bring-your-own)
-      - yomi_library:/library-dl
-      - ${SOURCES_PATH:-./sources}:/sources:ro
-      - yomi_config:/config
-      - ${BACKUP_PATH:-yomi_backups}:/backups
-    networks:
-      - yomi_internal
-      - yomi_app
+      - ${LIBRARY_PATH:-./library}:/library      # your existing comics (see PUID above)
+      - ${SOURCES_PATH:-./sources}:/sources:ro   # optional built source pack
+      - uchiyomi_data:/data                      # the embedded database (Postgres, in /data/pg)
+      - uchiyomi_downloads:/library-dl           # chapters Uchiyomi downloads
+      - uchiyomi_config:/config                  # secrets, custom sites, art overrides
+      - uchiyomi_cache:/cache                    # image cache (safe to delete)
+      - ${BACKUP_PATH:-uchiyomi_backups}:/backups
     ports:
-      - "${WEB_PORT:-8080}:3000"   # open the app at http://localhost:8080
-    depends_on:
-      yomi-db:
-        condition: service_healthy
-    healthcheck:
-      # /livez, not /healthz: a database blip must not mark the whole app unhealthy. Matches Dockerfile.aio.
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/livez >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    labels:
-      - com.centurylinklabs.watchtower.enable=false
+      - "${WEB_PORT:-8080}:3000"
+    networks: [uchiyomi_app]
 
-
-  # Cloudflare solver (headless Chrome) — lets the Aqua Manga source adapter get past Cloudflare.
-  yomi-flaresolverr:
+  # Cloudflare solver. Most manga aggregators sit behind Cloudflare, so the fetching half needs this.
+  uchiyomi-flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
-    container_name: yomi-flaresolverr
+    container_name: uchiyomi-flaresolverr
     restart: unless-stopped
     # Chrome writes its shared-memory segments here, and Docker's default /dev/shm is 64 MB. Under that,
     # chromedriver dies mid-challenge and FlareSolverr reports "Service /app/chromedriver unexpectedly
@@ -193,39 +93,28 @@ services:
       retries: 3
       start_period: 30s
     environment:
-      LOG_LEVEL: info
-      TZ: UTC
-    networks:
-      - yomi_app
+      LOG_LEVEL: warning
+    networks: [uchiyomi_app]
     expose:
       - "8191"
-    labels:
-      - com.centurylinklabs.watchtower.enable=false
 
-  # Extension engine. Runs Mihon/Tachiyomi extensions (which are Android/Kotlin) on the JVM and exposes them
-  # over an API; Uchiyomi keeps owning the library, reader, downloads and updates and only asks it for
-  # search/chapters/pages. Browse and install extensions from Uchiyomi's own admin panel.
-  #
-  # Pinned rather than :stable on purpose -- :stable is v2.2.2100, which is older than the extension API the
-  # current repository indexes require, so it sees an empty catalogue.
-  # It is a JVM and sits around 800MB of RAM. Do not want it? Set SUWAYOMI_URL= (empty) in .env.
-  yomi-suwayomi:
+  # Optional: Mihon/Tachiyomi extensions. Remove this service and set SUWAYOMI_URL= empty to drop it.
+  uchiyomi-suwayomi:
     image: ghcr.io/suwayomi/suwayomi-server:v2.3.2243
-    container_name: yomi-suwayomi
+    container_name: uchiyomi-suwayomi
     restart: unless-stopped
     environment:
-      TZ: UTC
-      # Uchiyomi does the downloading and owns the library; this instance must never write into it.
+      TZ: ${TZ:-UTC}
+      # Uchiyomi owns the library and does the downloading; this instance must never write into it. The
+      # development compose has said so from the start and this file, the one people actually install from,
+      # did not.
       AUTO_DOWNLOAD_CHAPTERS: "false"
       DOWNLOAD_AS_CBZ: "true"
     volumes:
-      - yomi_suwayomi:/home/suwayomi/.local/share/Tachidesk
-    networks:
-      - yomi_app
+      - uchiyomi_suwayomi:/home/suwayomi/.local/share/Tachidesk
+    networks: [uchiyomi_app]
     expose:
       - "4567"
-    labels:
-      - com.centurylinklabs.watchtower.enable=false
     healthcheck:
       # The image has bash but no curl, wget or nc, so bash opens the socket itself. 401 counts as alive:
       # the engine is up, it just has authentication switched on. A JVM takes a while to come up, hence the
@@ -237,15 +126,12 @@ services:
       start_period: 90s
 
 networks:
-  yomi_internal:                 # private: only db + bff (DB never leaves this network)
-    driver: bridge
-  yomi_app:                      # app tier: bff + web + flaresolverr talk to each other
-    driver: bridge
+  uchiyomi_app:
 
 volumes:
-  yomi_pgdata:
-  yomi_imgcache:
-  yomi_library:
-  yomi_config:
-  yomi_suwayomi:  # optional extension engine's own data (extensions + its database)
-  yomi_backups:   # default backup target; set BACKUP_PATH to a host dir (ideally another disk) to override
+  uchiyomi_data:       # the embedded database; back it up like any other volume, or rely on the nightly dump in /backups
+  uchiyomi_downloads:
+  uchiyomi_config:
+  uchiyomi_cache:
+  uchiyomi_backups:
+  uchiyomi_suwayomi:

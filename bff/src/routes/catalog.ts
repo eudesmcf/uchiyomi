@@ -13,6 +13,7 @@ import { runtime } from '../lib/runtime';
 import { authenticate, roleOf, userIdOf } from '../lib/auth';
 import { warmHeroBackdrops } from './images';
 import { writeProgress, reachedEnd } from '../lib/progress';
+import { refreshSourceMetadataAll } from '../lib/updater';
 
 async function seriesColors(ids: string[]): Promise<Map<string, string>> {
   if (!ids.length) return new Map();
@@ -242,7 +243,10 @@ export default async function catalogRoutes(app: FastifyInstance) {
     // A rescan walks the disk on everyone's behalf, so it is deliberately not a per-viewer read.
     const libs = await komga.libraries(SYSTEM_CTX).catch(() => [] as any[]);
     await Promise.all(libs.map((l: any) => komga.scanLibrary(SYSTEM_CTX, l.id).catch(() => {})));
-    return { scanned: true, libraries: libs.length };
+    // Catalog refreshes can contact many sources. Run them in the background so the top refresh button
+    // stays responsive, while still making this one action refresh disk and source-backed metadata.
+    void refreshSourceMetadataAll().catch(() => {});
+    return { scanned: true, libraries: libs.length, sourceRefreshStarted: true };
   });
 
   app.get('/api/home', async (req) => {

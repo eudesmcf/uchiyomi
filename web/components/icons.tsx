@@ -43,6 +43,15 @@ export const IcChevronRight = (p: P) => (
 export const IcPlay = (p: P) => (
   <svg {...base(p)} fill="currentColor" stroke="none"><path d="M7 4.5v15l13-7.5L7 4.5Z" /></svg>
 );
+export const IcPause = (p: P) => (
+  <svg {...base(p)} fill="currentColor" stroke="none"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" /></svg>
+);
+export const IcArrowUp = (p: P) => (
+  <svg {...base(p)}><path d="m12 19V5M6 11l6-6 6 6" /></svg>
+);
+export const IcArrowDown = (p: P) => (
+  <svg {...base(p)}><path d="m12 5v14M6 13l6 6 6-6" /></svg>
+);
 export const IcSettings = (p: P) => (
   <svg {...base(p)}><circle cx="12" cy="12" r="3.2" /><path d="M19.4 13.5a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.3-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1H22a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" /></svg>
 );

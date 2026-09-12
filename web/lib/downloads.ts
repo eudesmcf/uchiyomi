@@ -156,13 +156,20 @@ export async function downloadChapter(
 
   const d = await db();
   let done = 0;
+  const saved = new Set<number>();
   try {
-    for (const p of manifest.pages) {
-      const res = await fetch(p.url, { credentials: 'include' });
-      if (!res.ok) throw new Error(`page ${p.number}: HTTP ${res.status}`);
-      const blob = await res.blob();
-      await d.put('pages', blob, pageKey(bookId, p.number));
-      done++;
+    // Four page requests at once keeps individual offline downloads responsive without overwhelming a
+    // source. IndexedDB keys keep the final chapter order independent of completion order.
+    for (let i = 0; i < manifest.pages.length; i += 4) {
+      const batch = manifest.pages.slice(i, i + 4);
+      await Promise.all(batch.map(async (p) => {
+        const res = await fetch(p.url, { credentials: 'include' });
+        if (!res.ok) throw new Error(`page ${p.number}: HTTP ${res.status}`);
+        const blob = await res.blob();
+        await d.put('pages', blob, pageKey(bookId, p.number));
+        saved.add(p.number);
+      }));
+      done = saved.size;
       onProgress?.(done, manifest.pages.length);
     }
   } catch (e) {
@@ -172,9 +179,7 @@ export async function downloadChapter(
     // clearAllDownloads iterates listDownloads(), which reads only `chapters`. Smart-offline re-runs on every
     // visibilitychange and every `online` event, so on a phone with poor signal this accumulated daily until
     // the quota filled -- at which point "free up space" moved nothing, because nothing knew they were there.
-    for (let n = 0; n < done; n++) {
-      await d.delete('pages', pageKey(bookId, manifest.pages[n].number)).catch(() => {});
-    }
+    for (const n of saved) await d.delete('pages', pageKey(bookId, n)).catch(() => {});
     throw e;
   }
 

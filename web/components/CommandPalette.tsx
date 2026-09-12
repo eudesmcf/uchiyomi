@@ -62,7 +62,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       },
     },
     { key: 'updates', label: 'Updates', hint: 'new chapters', icon: <IcBell width={16} height={16} />, run: () => go('/updates') },
-    { key: 'downloads', label: 'Offline downloads', icon: <IcDownload width={16} height={16} />, run: () => go('/downloads') },
+    { key: 'downloads', label: tr('Download queue'), icon: <IcDownload width={16} height={16} />, run: () => go('/queue') },
     { key: 'browse', label: 'Browse genres', icon: <IcGrid width={16} height={16} />, run: () => go('/browse') },
     {
       key: 'refresh', label: 'Refresh library', hint: 'scan for new chapters', icon: <IcRefresh width={16} height={16} />,

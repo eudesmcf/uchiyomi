@@ -27,10 +27,12 @@ export interface SourceAdapter {
   name: string; // 'MangaDex'
   search(query: string): Promise<SourceSeries[]>;
   getSeries(id: string): Promise<SourceSeries | null>;
-  listChapters(seriesId: string): Promise<SourceChapter[]>;
+  listChapters(seriesId: string, language?: string): Promise<SourceChapter[]>;
+  /** The source request behind a chapter list, when it has a stable public URL. */
+  chapterListUrl?(seriesId: string, language?: string): string | undefined;
   getPageUrls(chapterId: string): Promise<string[]>;
   /** optional: browse the source's newest / recently-updated series (no search query). `page` is 1-based. */
-  latest?(page?: number): Promise<SourceSeries[]>;
+  latest?(page?: number, language?: string): Promise<SourceSeries[]>;
   /**
    * optional: browse what the source itself considers popular. `page` is 1-based.
    *
@@ -38,7 +40,7 @@ export interface SourceAdapter {
    * this listing -- it is the same page `latest` reads with a different sort -- so the alternative would be
    * inventing a ranking out of data we do not have, and getting it wrong.
    */
-  popular?(page?: number): Promise<SourceSeries[]>;
+  popular?(page?: number, language?: string): Promise<SourceSeries[]>;
   // ---- optional, plugin-declared capabilities (the core consults these instead of hardcoding ids) ----
   /** page/cover images sit behind Cloudflare → fetch them with FlareSolverr session cookies. */
   requiresCloudflare?: boolean;

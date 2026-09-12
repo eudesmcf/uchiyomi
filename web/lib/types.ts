@@ -23,6 +23,11 @@ export interface SeriesMetadata {
 export interface Series {
   /** Whether the scheduled updater fetches new chapters for this series. */
   autoUpdate?: boolean;
+  /** Optional origin metadata for source-backed series. */
+  sourceUrl?: string | null;
+  chapterListUrl?: string | null;
+  sourceName?: string | null;
+  sourceLanguage?: string | null;
   /** The folder on disk, relative to the library root. Only sent to admins, for the rename control. */
   folder?: string;
   id: string;
@@ -72,6 +77,12 @@ export interface Book {
   media: { pagesCount: number; mediaType?: string; status?: string };
   metadata: BookMetadata;
   readProgress?: ReadProgress | null;
+  downloaded?: boolean;
+  downloadStatus?: 'pending' | 'downloading' | 'downloaded' | 'error' | string;
+  remote?: boolean;
+  sourceChapterId?: string | null;
+  availableOnline?: boolean;
+  error?: string | null;
 }
 
 export interface PageInfo {

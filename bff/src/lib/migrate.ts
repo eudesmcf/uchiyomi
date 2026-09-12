@@ -185,6 +185,7 @@ ALTER TABLE lib_series ADD COLUMN IF NOT EXISTS auto_update boolean NOT NULL DEF
 -- so the updater calls getSource(source_id).listChapters(source_series_id) directly — no name/url reverse-parsing.)
 ALTER TABLE lib_series ADD COLUMN IF NOT EXISTS source_id        text;
 ALTER TABLE lib_series ADD COLUMN IF NOT EXISTS source_series_id text;
+ALTER TABLE lib_series ADD COLUMN IF NOT EXISTS source_language  text;
 -- What the source said when the updater last asked, so "how far behind is this series" is a query rather
 -- than 192 listChapters calls. source_missing is the exact count the updater computed (chapters the source
 -- lists that we do not hold). source_checked_at is stamped whenever the source was ASKED, answered or not,
@@ -192,6 +193,23 @@ ALTER TABLE lib_series ADD COLUMN IF NOT EXISTS source_series_id text;
 ALTER TABLE lib_series ADD COLUMN IF NOT EXISTS source_chapters   int;
 ALTER TABLE lib_series ADD COLUMN IF NOT EXISTS source_missing    int;
 ALTER TABLE lib_series ADD COLUMN IF NOT EXISTS source_checked_at timestamptz;
+
+-- Complete remote chapter catalog. Rows exist before their archive is downloaded, so the UI can
+-- distinguish "known but pending" from "downloaded" without manufacturing files in lib_books.
+CREATE TABLE IF NOT EXISTS source_chapters (
+  series_id         text NOT NULL REFERENCES lib_series(id) ON DELETE CASCADE,
+  source_id         text NOT NULL,
+  source_chapter_id text NOT NULL,
+  number            real NOT NULL,
+  title             text,
+  pages             int,
+  published_at      timestamptz,
+  status            text NOT NULL DEFAULT 'pending',
+  error             text,
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (series_id, source_chapter_id)
+);
+CREATE INDEX IF NOT EXISTS source_chapters_series_number_idx ON source_chapters (series_id, number);
 
 -- Content identity, so a chapter can be recognised after it moves. Derived from the archive's central
 -- directory (entry names + CRC-32 + uncompressed sizes), which is cheap to read and survives recompression.
@@ -625,11 +643,8 @@ DECLARE
     ARRAY['series_overrides', 'series_id', 'lib_series', 'CASCADE'],
     ARRAY['notes',            'series_id', 'lib_series', 'CASCADE'],
     ARRAY['read_progress',    'series_id', 'lib_series', 'CASCADE'],
-    -- NOT cascade. Deleting a chapter row must never silently delete what someone read of it: that is the
-    -- one loss this project has no way to undo, and it syncs outward to AniList before anyone notices.
-    -- RESTRICT keeps the reference honest while making any future chapter cleanup fail loudly, so whoever
-    -- writes it has to decide what happens to the history first.
-    ARRAY['read_progress',    'book_id',   'lib_books',  'RESTRICT'],
+    -- book_id deliberately has no FK: remote chapters use stable synthetic remote_* IDs before there
+    -- is a lib_books row. series_id remains constrained, so progress still cannot outlive its series.
     -- a note about a series outlives any one chapter of it
     ARRAY['notes',            'book_id',   'lib_books',  'SET NULL'],
     -- the cover pointer should blank rather than dangle
@@ -771,6 +786,15 @@ const DATA_MIGRATIONS: { id: string; run: (c: PoolClient) => Promise<void> }[] =
         `ALTER TABLE read_progress ADD CONSTRAINT fk_read_progress_book_id
            FOREIGN KEY (book_id) REFERENCES lib_books(id) ON DELETE RESTRICT NOT VALID`,
       );
+    },
+  },
+  // Remote chapters are readable before download and use `remote_<series>_<chapter>` as their identity.
+  // The old FK to lib_books made every progress write for one fail with a 500, which in turn made manual
+  // "Mark as read" look like a visual-only action. Keep series_id constrained; it is the durable owner.
+  {
+    id: '0005-remote-progress-book-ids',
+    run: async (c) => {
+      await c.query(`ALTER TABLE read_progress DROP CONSTRAINT IF EXISTS fk_read_progress_book_id`);
     },
   },
 

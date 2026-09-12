@@ -10,7 +10,7 @@
 // v8: this worker leaked an IndexedDB connection, which blocked the page's v1 to v2 upgrade of the offline
 // store and hung the reader on "Loading chapter...". The old worker has to be replaced for that to stop, so
 // the bump is load-bearing here rather than cosmetic.
-const VERSION = 'v8';
+const VERSION = 'v9';
 const SHELL = `yomi-shell-${VERSION}`;
 const STATIC = `yomi-static-${VERSION}`;
 const IMG = `yomi-img-${VERSION}`;
