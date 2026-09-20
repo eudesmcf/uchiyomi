@@ -34,7 +34,10 @@ export default function AdultSourcesPage() {
   const filteredSources = useMemo(() => {
     if (sourceLang === 'all') return sources;
     const wanted = languageBase(sourceLang);
-    return sources.filter((source) => languageBase(source.lang) === 'all' || languageBase(source.lang) === wanted);
+    // A language-specific view must not fall back to the extension's "all" source.  Hitomi
+    // publishes one source per language plus a universal source; including the latter here made
+    // the Portuguese view look selected while still returning every language.
+    return sources.filter((source) => languageBase(source.lang) === wanted);
   }, [sources, sourceLang]);
 
   useEffect(() => {
