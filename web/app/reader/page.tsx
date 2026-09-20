@@ -408,7 +408,9 @@ function ReaderInner() {
   // home. So while reading there was no way to reach the series short of searching for it by name.
   // Prefer the ACTIVE chapter's series over chapters[0]'s: continuous reading appends chapters as you go.
   const activeSeriesId = activeChapter?.seriesId || seriesId;
-  const seriesHref = activeSeriesId ? `/series/?id=${activeSeriesId}` : null;
+  // Preview chapters deliberately have no library series to navigate back to. The opaque preview id is
+  // only a temporary reader handle; treating it as a real series would send the header to a dead page.
+  const seriesHref = activeSeriesId && !activeSeriesId.startsWith('preview_') ? `/series/?id=${activeSeriesId}` : null;
 
   const back = () => (typeof window !== 'undefined' && window.history.length > 1 ? router.back() : router.push(seriesId ? `/series/?id=${seriesId}` : '/'));
   const goChapter = useCallback((cid?: string) => { if (cid) router.replace(`/reader/?book=${cid}`); }, [router]);
