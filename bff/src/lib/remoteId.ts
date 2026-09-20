@@ -15,3 +15,19 @@ export function parseRemoteBookId(id: string): { seriesId: string; sourceChapter
     return null;
   }
 }
+
+/** Opaque, non-persistent chapter ids used by the "read without adding" preview. */
+export function previewBookId(sourceId: string, sourceSeriesId: string, sourceChapterId: string): string {
+  const payload = JSON.stringify({ sourceId, sourceSeriesId, sourceChapterId });
+  return `preview_${Buffer.from(payload).toString('base64url')}`;
+}
+
+export function parsePreviewBookId(id: string): { sourceId: string; sourceSeriesId: string; sourceChapterId: string } | null {
+  if (!id.startsWith('preview_')) return null;
+  try {
+    const raw = Buffer.from(id.slice('preview_'.length), 'base64url').toString('utf8');
+    const value = JSON.parse(raw) as Partial<{ sourceId: string; sourceSeriesId: string; sourceChapterId: string }>;
+    if (!value.sourceId || !value.sourceSeriesId || !value.sourceChapterId) return null;
+    return { sourceId: value.sourceId, sourceSeriesId: value.sourceSeriesId, sourceChapterId: value.sourceChapterId };
+  } catch { return null; }
+}

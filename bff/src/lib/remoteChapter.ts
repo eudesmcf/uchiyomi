@@ -3,9 +3,9 @@ import { getSource } from './sources';
 import { cfSession } from './sources/flaresolverr';
 import type { SourceAdapter } from './sources/types';
 import type { ViewCtx } from './visibility';
-import { Params, visible } from './visibility';
-export { parseRemoteBookId, remoteBookId } from './remoteId';
-import { parseRemoteBookId } from './remoteId';
+import { Params, visible, sourceAllowedFor } from './visibility';
+export { parseRemoteBookId, remoteBookId, parsePreviewBookId, previewBookId } from './remoteId';
+import { parseRemoteBookId, parsePreviewBookId } from './remoteId';
 
 export interface RemoteChapterRow {
   series_id: string;
@@ -26,19 +26,45 @@ export async function resolveRemoteChapter(ctx: ViewCtx, id: string): Promise<Re
   const parsed = parseRemoteBookId(id);
   if (!parsed) return null;
   const p = new Params();
-  const series = `(
+  const visibleSeries = `(
     SELECT s.id, s.title, s.source_id, s.source_series_id, s.web
       FROM lib_series s
      WHERE ${visible('s', ctx, p)}
   ) sv`;
-  return one<RemoteChapterRow>(
+  const found = await one<RemoteChapterRow>(
     `SELECT sc.series_id, sv.title AS series_title, sc.source_id, sv.source_series_id,
             sc.source_chapter_id, sc.number, sc.title, sc.pages, sc.published_at,
             sc.status, sc.error, sv.web AS source_url
-       FROM source_chapters sc JOIN ${series} ON sv.id = sc.series_id
+       FROM source_chapters sc JOIN ${visibleSeries} ON sv.id = sc.series_id
       WHERE sc.series_id = ${p.add(parsed.seriesId)} AND sc.source_chapter_id = ${p.add(parsed.sourceChapterId)}`,
     p.values as any[],
   );
+  if (found) return found;
+
+  const preview = parsePreviewBookId(id);
+  if (!preview) return null;
+  const source = getSource(preview.sourceId);
+  if (!source || !sourceAllowedFor(source, ctx.maxAgeRating)) return null;
+  const [series, chapters] = await Promise.all([
+    source.getSeries(preview.sourceSeriesId),
+    source.listChapters(preview.sourceSeriesId),
+  ]);
+  const chapter = chapters.find((c) => String(c.sourceId) === preview.sourceChapterId);
+  if (!series || !chapter) return null;
+  return {
+    series_id: id,
+    series_title: series.title,
+    source_id: preview.sourceId,
+    source_series_id: preview.sourceSeriesId,
+    source_chapter_id: preview.sourceChapterId,
+    number: chapter.number,
+    title: chapter.title || `Chapter ${chapter.number}`,
+    pages: chapter.pages ?? null,
+    published_at: chapter.publishedAt || null,
+    status: 'preview',
+    error: null,
+    source_url: series.url || source.base || null,
+  };
 }
 
 export function remoteSource(row: RemoteChapterRow): SourceAdapter | null {

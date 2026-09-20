@@ -129,6 +129,22 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
     router.replace(done.seriesId ? `/series/?id=${done.seriesId}` : '/library');
   };
 
+  const readWithoutAdding = async () => {
+    if (!picked || !detail?.chapters.length) return;
+    setOpening(true);
+    try {
+      const preview = await api<{ bookId: string }>(
+        `/api/sources/preview?source=${encodeURIComponent(picked.source)}&sourceId=${encodeURIComponent(picked.sourceId)}&chapterId=${encodeURIComponent(detail.chapters[0].sourceId)}${picked.lang ? `&lang=${encodeURIComponent(picked.lang)}` : ''}`,
+      );
+      onClose();
+      router.push(`/reader/?book=${encodeURIComponent(preview.bookId)}`);
+    } catch (e) {
+      toast(msgOf(e, tr('This chapter could not be opened.')), 'error');
+    } finally {
+      setOpening(false);
+    }
+  };
+
   // ---------------------------------------------------------------- done
   if (done) {
     return (
@@ -261,9 +277,9 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
             {dup && <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">{dup}</p>}
 
             <div className="mt-4 flex flex-col gap-2 sm:flex-row-reverse">
-              {detail.seriesUrl && (
-                <button type="button" onClick={() => window.open(detail.seriesUrl, '_blank', 'noopener,noreferrer')}
-                  className="btn-ghost flex-1 py-2.5 text-sm">
+              {detail.chapters.length > 0 && (
+                <button type="button" onClick={readWithoutAdding} disabled={opening}
+                  className="btn-ghost flex-1 py-2.5 text-sm disabled:opacity-50">
                   {tr('Read without adding')}
                 </button>
               )}

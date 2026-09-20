@@ -9,6 +9,7 @@ import { noteChapterFailure } from '../lib/chapterFailures';
 import { scanOrder } from '../lib/scanOrder';
 import { budgetFor } from '../lib/sources/budget';
 import { SOLVER_CONCURRENCY } from '../lib/sources/flaresolverr';
+import { previewBookId } from '../lib/remoteId';
 
 /**
  * How many searches a fill scan runs at once, and when it stops starting new ones.
@@ -1131,6 +1132,19 @@ export default async function sourceRoutes(app: FastifyInstance) {
       chapterUrl: src.chapterListUrl?.(sourceId, lang),
       chapters: chapters.map((chapter) => ({ sourceId: chapter.sourceId, number: chapter.number, title: chapter.title })),
     };
+  });
+
+  // Create an opaque, non-persistent id for the first remote chapter. The reader can use the normal
+  // book/page endpoints with it, while no series, chapter or download is added to the library.
+  app.get('/api/sources/preview', async (req, reply) => {
+    const { source, sourceId, chapterId, lang } = req.query as { source?: string; sourceId?: string; chapterId?: string; lang?: string };
+    const src = source ? getSource(source) : null;
+    if (!src || !sourceId) return reply.code(400).send({ error: 'bad_request' });
+    if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
+    const { series, chapters } = await seriesAndChapters(src, sourceId, lang);
+    const chapter = chapterId ? chapters.find((c) => String(c.sourceId) === chapterId) : chapters[0];
+    if (!series || !chapter) return reply.code(404).send({ error: 'chapter_not_available' });
+    return { bookId: previewBookId(source!, sourceId, String(chapter.sourceId)) };
   });
 
   app.post('/api/sources/add', async (req, reply) => {
