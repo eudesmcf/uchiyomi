@@ -70,7 +70,8 @@ COPY --from=api /app/dist ./dist
 COPY bff/openapi.yaml ./openapi.yaml
 COPY --from=web /w/out ./web
 COPY bff/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# The source checkout may come from Windows with CRLF; strip it before tini executes the shebang on Linux.
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # This is what turns the static serving on. Unset it and the same image is API-only.
 ENV WEB_ROOT=/app/web
