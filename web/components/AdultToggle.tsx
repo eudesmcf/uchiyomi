@@ -4,6 +4,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { adultShown, setAdultShown, onAdultChange } from '@/lib/adult';
 import { t as tr } from '@/lib/i18n';
+import Link from 'next/link';
+import type { Src } from '@/lib/sourceGroups';
 
 export interface LibraryRow { id: string; name: string; adult?: boolean }
 
@@ -65,4 +67,15 @@ export function AdultToggle({ className = '' }: { className?: string }) {
       {tr('Show 18+')}
     </button>
   );
+}
+
+/** Entry point for adult source browsing; the API only returns it to accounts allowed to use those sources. */
+export function AdultSourcesLink({ className = '' }: { className?: string }) {
+  const { data: sources } = useQuery({
+    queryKey: ['adult-sources-link'],
+    queryFn: () => api<{ content: Src[] }>('/api/sources?adultSources=1'),
+    staleTime: 60_000,
+  });
+  if (!(sources?.content?.length)) return null;
+  return <Link href="/adult/" className={`chip whitespace-nowrap border-rose-400/40 text-rose-300 hover:bg-rose-400/10 ${className}`}>18+ {tr('Sources')}</Link>;
 }

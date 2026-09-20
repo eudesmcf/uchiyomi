@@ -99,14 +99,15 @@ function toSeries(m: RemoteManga, adapterId: string, fallbackUrl?: string | null
 function toChapter(c: RemoteChapter): SourceChapter | null {
   if (c?.id == null) return null;
   const num = typeof c.chapterNumber === 'number' ? c.chapterNumber : NaN;
-  // A chapter with no usable number can't be ordered, named or diffed against the library — drop it rather
-  // than inventing 0, which would collide with a real chapter 0.
-  if (!Number.isFinite(num) || num < 0) return null;
+  // Suwayomi uses -1 for a one-shot / single-chapter work. It is still a readable chapter; normalise it
+  // to 1 so it can be ordered, persisted and opened by the owned catalog instead of disappearing.
+  if (!Number.isFinite(num)) return null;
+  const normalizedNumber = num < 0 ? 1 : num;
   const when = Number(c.uploadDate);
   return {
     sourceId: String(c.id),
-    number: num,
-    title: c.name?.trim() || `Chapter ${num}`,
+    number: normalizedNumber,
+    title: c.name?.trim() || `Chapter ${normalizedNumber}`,
     pages: typeof c.pageCount === 'number' && c.pageCount > 0 ? c.pageCount : undefined,
     publishedAt: Number.isFinite(when) && when > 0 ? new Date(when).toISOString() : undefined,
   };

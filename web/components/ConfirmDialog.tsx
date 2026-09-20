@@ -44,8 +44,9 @@ export function Modal({
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
+  // z-[60] keeps the dialog above the fixed mobile navigation (z-40), including when opened from a page shell.
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ink-950/70 p-4 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-ink-950/70 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm" onClick={onClose}>
       <div
         ref={ref}
         role="dialog"

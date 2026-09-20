@@ -54,7 +54,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* The mobile bottom nav is fixed and includes its own safe-area padding. Keep enough scroll
           clearance for the last card's primary action (notably the "+" used to add a series) so it
           cannot finish underneath the navigation bar on short phones. */}
-      <main className="shell relative z-[1] pb-32 lg:pb-12">
+      {/* Keep the shell out of its own stacking context so dialogs can rise above the mobile nav. */}
+      <main className="shell relative pb-32 lg:pb-12">
         <PageTransition>{children}</PageTransition>
       </main>
       <BottomNav />

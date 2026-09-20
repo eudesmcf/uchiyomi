@@ -113,6 +113,8 @@ services:
     volumes:
       - uchiyomi_suwayomi:/home/suwayomi/.local/share/Tachidesk
     networks: [uchiyomi_app]
+    ports:
+      - "127.0.0.1:4567:4567"
     expose:
       - "4567"
     healthcheck:

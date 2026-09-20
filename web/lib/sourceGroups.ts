@@ -13,6 +13,7 @@
 export interface Src {
   id: string;
   name: string;
+  adult?: boolean;
   /** Retained on the row; nothing reads it since the language grouping was removed. */
   lang: string | null;
   latest?: boolean;

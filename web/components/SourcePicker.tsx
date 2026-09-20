@@ -164,19 +164,20 @@ export function SourcePicker({ sources, states, settled, total, selected, onSele
  * had just forgotten it. `settled` could then never reach `budget.length`, leaving skeleton tiles on screen
  * forever and killing infinite scroll for the rest of the session.
  */
-export function SourceLatest({ source, listMode, language, page, enabled, onSettled }: {
+export function SourceLatest({ source, listMode, language, page, enabled, adultSources = false, onSettled }: {
   source: Src;
   listMode: ListMode;
   language?: string;
   page: number;
   enabled: boolean;
+  adultSources?: boolean;
   /** The key is namespaced by listing mode; the parent stores everything under it. */
   onSettled: (key: string, items: any[], ok: boolean) => void;
 }) {
   const { data, isError, isSuccess } = useQuery({
     // The mode is part of the key here for the same reason it is part of the server's cache key: without
     // it the two listings share an entry and whichever loads first answers for both.
-    queryKey: ['src-list', listMode, source.id, language || 'default', page],
+    queryKey: ['src-list', listMode, source.id, language || 'default', page, adultSources],
     // The signal matters more here than anywhere else in the app. Without consuming it, react-query's
     // `removeObserver` takes its non-aborting branch, so a source dropped from the wall keeps scraping:
     // the server spends its full eight-second budget on an answer nobody will read, and a timeout then
@@ -184,7 +185,7 @@ export function SourceLatest({ source, listMode, language, page, enabled, onSett
     // wall worse for the next half hour.
     queryFn: ({ signal }) =>
       api<{ content: any[] }>(
-        `/api/sources/${listMode === 'popular' ? 'popular' : 'latest'}?source=${encodeURIComponent(source.id)}&page=${page}${language ? `&lang=${encodeURIComponent(language)}` : ''}`,
+        `/api/sources/${listMode === 'popular' ? 'popular' : 'latest'}?source=${encodeURIComponent(source.id)}&page=${page}${language ? `&lang=${encodeURIComponent(language)}` : ''}${adultSources ? '&adultSources=1' : ''}`,
         { signal },
       ),
     enabled,

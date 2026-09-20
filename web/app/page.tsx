@@ -12,7 +12,7 @@ import { ART } from '@/lib/art';
 import { Img, ProgressBar, Rail, RailSkeleton, SectionTitle, Reveal } from '@/components/ui';
 import { SeriesCard, ContinueCard } from '@/components/cards';
 import { HeroCarousel } from '@/components/HeroCarousel';
-import { AdultToggle } from '@/components/AdultToggle';
+import { AdultToggle, AdultSourcesLink } from '@/components/AdultToggle';
 import { IcPlay, IcSparkle, IcRefresh, IcBell } from '@/components/icons';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { Avatar } from '@/components/Avatar';
@@ -140,6 +140,7 @@ export default function HomePage() {
           {greeting()}{user?.displayName && user.displayName !== 'me' ? `, ${user.displayName}` : ''}.
         </p>
         <AdultToggle className="shrink-0" />
+        <AdultSourcesLink className="shrink-0" />
       </div>
 
       {/* Keep reading */}

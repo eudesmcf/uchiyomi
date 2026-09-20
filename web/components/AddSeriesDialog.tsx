@@ -261,6 +261,12 @@ export function AddSeriesDialog({ seed, sources, onClose, onAdded }: {
             {dup && <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">{dup}</p>}
 
             <div className="mt-4 flex flex-col gap-2 sm:flex-row-reverse">
+              {detail.seriesUrl && (
+                <button type="button" onClick={() => window.open(detail.seriesUrl, '_blank', 'noopener,noreferrer')}
+                  className="btn-ghost flex-1 py-2.5 text-sm">
+                  {tr('Read without adding')}
+                </button>
+              )}
               <button onClick={() => add(!!dup)} disabled={adding} className="btn-accent flex-1 py-2.5 text-sm disabled:opacity-50">
                 {adding ? tr('Working…') : dup ? tr('Add anyway') : tr('Add to library')}
               </button>

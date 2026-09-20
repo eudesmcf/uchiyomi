@@ -39,7 +39,7 @@ function Test-UchiyomiBackendProcess([int]$ProcessId) {
   # depois de normalizar, mas ainda exija o caminho absoluto deste repositorio.
   $commandLine = ([string]$process.CommandLine).Replace('\', '/')
   $expectedPath = $serverPath.Replace('\', '/')
-  return $commandLine.Contains($expectedPath, [System.StringComparison]::OrdinalIgnoreCase)
+  return $commandLine.IndexOf($expectedPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
 function Wait-Until([scriptblock]$Condition, [string]$Description, [int]$TimeoutSeconds = 20) {
@@ -66,7 +66,7 @@ function Get-LocalUchiyomiBackendProcesses {
   Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
     Where-Object {
       $commandLine = ([string]$_.CommandLine) -replace '[\\/]', '/'
-      $commandLine.Contains($expectedPath, [System.StringComparison]::OrdinalIgnoreCase)
+      $commandLine.IndexOf($expectedPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
     }
 }
 
@@ -123,7 +123,10 @@ function Ensure-Dependencies([string]$Path, [string]$RequiredBinary) {
 
 function Wait-ForHealth([int]$LocalPort, [System.Diagnostics.Process]$Process) {
   $healthUrl = "http://127.0.0.1:$LocalPort/healthz"
-  $deadline = (Get-Date).AddSeconds(30)
+  # Migrations and source registration can take over 30 seconds on the first local start,
+  # especially while PostgreSQL is waking up. Do not report a false startup failure while
+  # the backend is still progressing normally.
+  $deadline = (Get-Date).AddSeconds(90)
   while ((Get-Date) -lt $deadline) {
     if ($Process.HasExited) { throw "O backend encerrou durante a inicializacao (codigo $($Process.ExitCode))." }
     try {

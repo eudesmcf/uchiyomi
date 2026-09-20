@@ -49,6 +49,9 @@ async function main() {
   const app = Fastify({
     logger: { level: env.NODE_ENV === 'production' ? 'info' : 'debug' },
     trustProxy: true,
+    // Next's static export adds a trailing slash to page/API URLs. Accept both forms so local
+    // development and the single-container deployment do not turn /auth/login/ into a 404.
+    routerOptions: { ignoreTrailingSlash: true },
     bodyLimit: 2 * 1024 * 1024,
   });
 

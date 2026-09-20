@@ -90,6 +90,7 @@ export default function DiscoverPage() {
   const [listMode, setListMode] = useState<ListMode>('newest');
   // Portuguese is the app's content-language default; the UI locale remains independently configurable.
   const [sourceLang, setSourceLang] = useState('pt-br');
+  const [genre, setGenre] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
@@ -115,6 +116,16 @@ export default function DiscoverPage() {
     values.add('pt-br');
     return [...values].sort((a, b) => a.localeCompare(b));
   }, [sources]);
+  const genreOptions = useMemo(() => {
+    const genres = new Set<string>();
+    for (const item of trending?.content ?? []) for (const value of item.genres ?? []) if (value.trim()) genres.add(value.trim());
+    return [...genres].sort((a, b) => a.localeCompare(b));
+  }, [trending]);
+  const filteredTrending = useMemo(() => {
+    if (!genre) return trending?.content ?? [];
+    return (trending?.content ?? []).filter((item) => item.genres?.some((value) => value.toLowerCase() === genre.toLowerCase()));
+  }, [trending, genre]);
+  const categoryActive = mode === 'newest' && Boolean(genre);
   const filteredSources = useMemo(() => {
     if (sourceLang === 'all') return sources;
     const wanted = languageBase(sourceLang);
@@ -197,12 +208,13 @@ export default function DiscoverPage() {
   }, [mode, listMode, selected, searchHits, order, byId]);
 
   const nameOf = useCallback((id: string) => sources.find((s) => s.id === id)?.name, [sources]);
-  const pending = mode === 'newest' ? Math.max(0, budget.length - settled) : (searching ? 3 : 0);
+  const pending = categoryActive ? 0 : mode === 'newest' ? Math.max(0, budget.length - settled) : (searching ? 3 : 0);
 
   const search = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const term = q.trim();
     if (!term) return;
+    setGenre('');
     setMode('search'); setSearching(true); setSearchHits([]);
     try {
       const r = await api<{ content: SearchGroup[] }>(`/api/sources/search-all?q=${encodeURIComponent(term)}`);
@@ -226,6 +238,12 @@ export default function DiscoverPage() {
     setOrder([]);
     setStates({});
   };
+  const changeGenre = (next: string) => {
+    setGenre(next);
+    setMode('newest');
+    setSelected(null);
+    setPage(1);
+  };
 
   const open = (it: SourceItem) => {
     if (it.inLibrary || added.has(norm(it.title))) return;
@@ -236,7 +254,7 @@ export default function DiscoverPage() {
 
   // ---------------------------------------------------------------- more
   const sentinel = useRef<HTMLDivElement>(null);
-  const canPage = mode === 'newest' && settled >= budget.length && budget.length > 0 && page < 5;
+  const canPage = mode === 'newest' && !categoryActive && settled >= budget.length && budget.length > 0 && page < 5;
   useEffect(() => {
     const el = sentinel.current;
     if (!el || !canPage) return;
@@ -268,15 +286,15 @@ export default function DiscoverPage() {
    * cover and letterboxes it on wide viewports.
    */
   const heroSlides = useMemo(() => {
-    const all = trending?.content ?? [];
+    const all = filteredTrending;
     const withArt = all.filter((t) => t.banner);
     const rest = all.filter((t) => !t.banner);
     return [...withArt, ...rest].slice(0, HERO_SLIDES);
-  }, [trending]);
+  }, [filteredTrending]);
   const rail = useMemo(() => {
     const lead = new Set(heroSlides.map((s) => s.title));
-    return (trending?.content ?? []).filter((t) => !lead.has(t.title));
-  }, [trending, heroSlides]);
+    return filteredTrending.filter((t) => !lead.has(t.title));
+  }, [filteredTrending, heroSlides]);
 
   // ---------------------------------------------------------------- may they be here at all
   // The tab is hidden for this account and every route this page calls now refuses it, so a typed URL would
@@ -310,14 +328,16 @@ export default function DiscoverPage() {
   return (
     <div className="min-h-screen-d px-4 lg:px-0">
       {heroSlides.length > 0 && mode === 'newest' && (
-        <DiscoverHero slides={heroSlides} onPick={(t) => setSeed({ kind: 'trending', title: t.title })} />
+        <DiscoverHero key={genre || 'all'} slides={heroSlides} onPick={(t) => setSeed({ kind: 'trending', title: t.title })} />
       )}
 
       <header className="pt-5 lg:pt-7">
         <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
           <div className="min-w-0">
             <h1 className="font-display text-2xl font-bold tracking-tight lg:text-3xl">{tr('Discover')}</h1>
-            <p className="mt-0.5 text-sm text-fog-400">{tr('Newest from your sources')}</p>
+            <p className="mt-0.5 text-sm text-fog-400">
+              {categoryActive ? `${tr('Recommendations by category')} · ${genre}` : tr('Newest from your sources')}
+            </p>
           </div>
           <label className="field flex items-center gap-2 py-0 text-sm">
             <span className="text-xs text-fog-500">{tr('Language')}</span>
@@ -336,6 +356,17 @@ export default function DiscoverPage() {
               })}
             </select>
           </label>
+          {genreOptions.length > 0 && (
+            <label className="field flex items-center gap-2 py-0 text-sm">
+              <span className="text-xs text-fog-500">{tr('Category')}</span>
+              <select value={genre} onChange={(e) => changeGenre(e.target.value)}
+                className="max-w-[10rem] cursor-pointer bg-ink-800 py-2.5 text-fog-100 outline-none [color-scheme:dark]"
+                style={{ colorScheme: 'dark' }} aria-label={tr('Category')}>
+                <option value="">{tr('All categories')}</option>
+                {genreOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+          )}
           <form onSubmit={search} className="flex w-full items-center gap-2 sm:w-auto">
             <div className="field flex min-w-0 flex-1 items-center gap-2 py-0 sm:w-72 lg:w-80">
               <IcSearch width={17} height={17} className="shrink-0 text-fog-500" />
@@ -354,7 +385,7 @@ export default function DiscoverPage() {
         </div>
       </header>
 
-      {mode === 'newest' && (
+      {mode === 'newest' && !categoryActive && (
         <SourcePicker
           sources={budget} states={states} settled={settled} total={budget.length}
           selected={selected} onSelect={setSelected}
@@ -367,7 +398,7 @@ export default function DiscoverPage() {
           The key carries the listing mode, so switching Newest/Popular REMOUNTS these and they fetch the
           other listing. That pairing is not optional: a child that keeps its key keeps its cached query,
           never re-reports, and the wall waits forever on a source it thinks it has not heard from. */}
-      {mode === 'newest' && budget.map((s, i) => (
+      {mode === 'newest' && !categoryActive && budget.map((s, i) => (
       <SourceLatest key={`${listMode}:${s.id}:${sourceLang}:${page}`} source={s} listMode={listMode} language={sourceLang === 'all' ? undefined : sourceLang}
           page={page} enabled={i < gate} onSettled={onSettled} />
       ))}
@@ -398,31 +429,41 @@ export default function DiscoverPage() {
 
       <div className="mb-3 mt-6 flex items-baseline justify-between gap-3">
         <h2 className="font-display text-lg font-semibold tracking-tight text-fog-50 lg:text-xl">
-          {mode === 'search' ? tr('Results across your sources') : tr('Newest from your sources')}
+          {mode === 'search' ? tr('Results across your sources') : categoryActive ? `${tr('Recommendations by category')} · ${genre}` : tr('Newest from your sources')}
         </h2>
         {mode === 'search' ? (
           <button onClick={backToNewest} className="chip shrink-0 text-xs">
             <IcChevronLeft width={13} height={13} />{tr('Newest')}
           </button>
-        ) : budget.length > 0 && settled < budget.length ? (
+        ) : !categoryActive && budget.length > 0 && settled < budget.length ? (
           <span className="shrink-0 text-xs tabular-nums text-fog-500">
             {tr('{done} of {total} sources', { done: settled, total: budget.length })}
           </span>
         ) : null}
       </div>
 
-      <div className="grid grid-cols-3 gap-x-3 gap-y-5 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 lg:gap-x-4 xl:grid-cols-8 2xl:grid-cols-9 min-[1800px]:grid-cols-10">
-        {wall.map((it, i) => (
-          <SourceCard key={`${it.source}:${it.sourceId}`} item={{ ...it, inLibrary: it.inLibrary || added.has(norm(it.title)) }}
-            sourceName={mode === 'newest' && order.length > 1 ? nameOf(it.source) : undefined}
-            onAdd={() => open(it)} eager={i < 12} />
-        ))}
-        {Array.from({ length: Math.min(18, pending * 6) }).map((_, i) => (
-          <div key={`sk${i}`} className="skeleton aspect-[2/3] rounded-2xl" />
-        ))}
-      </div>
+      {categoryActive ? (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+          {filteredTrending.map((t, i) => (
+            <Reveal key={t.title} delay={Math.min(i, 12) * 28}>
+              <TrendingCard t={t} onPick={(x) => setSeed({ kind: 'trending', title: x.title })} />
+            </Reveal>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-x-3 gap-y-5 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 lg:gap-x-4 xl:grid-cols-8 2xl:grid-cols-9 min-[1800px]:grid-cols-10">
+          {wall.map((it, i) => (
+            <SourceCard key={`${it.source}:${it.sourceId}`} item={{ ...it, inLibrary: it.inLibrary || added.has(norm(it.title)) }}
+              sourceName={mode === 'newest' && order.length > 1 ? nameOf(it.source) : undefined}
+              onAdd={() => open(it)} eager={i < 12} />
+          ))}
+          {Array.from({ length: Math.min(18, pending * 6) }).map((_, i) => (
+            <div key={`sk${i}`} className="skeleton aspect-[2/3] rounded-2xl" />
+          ))}
+        </div>
+      )}
 
-      {!wall.length && !pending && (
+      {!categoryActive && !wall.length && !pending && (
         <div className="card col-span-full mt-2 p-8 text-center">
           <p className="text-sm text-fog-400">
             {mode === 'search' ? tr('No results across your sources — try another title.')
@@ -441,9 +482,11 @@ export default function DiscoverPage() {
 
       <div ref={sentinel} className="h-16" />
 
-      {mode === 'newest' && rail.length > 0 && (
+      {mode === 'newest' && !categoryActive && rail.length > 0 && (
         <section className="pb-6">
-          <h2 className="mb-3 font-display text-lg font-semibold tracking-tight text-fog-50 lg:text-xl">{tr('Trending manhwa')}</h2>
+          <h2 className="mb-3 font-display text-lg font-semibold tracking-tight text-fog-50 lg:text-xl">
+            {genre ? `${tr('Trending manhwa')} · ${genre}` : tr('Trending manhwa')}
+          </h2>
           {/* pb-3 rather than pb-1: the global scrollbar is 8px and used to be hidden, so the rail had no
               room for it and it would have sat on the card captions. */}
           <ScrollRail label={tr('Trending manhwa')}

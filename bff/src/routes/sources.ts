@@ -356,6 +356,19 @@ export async function addSeriesFromSource(opts: {
     await q('UPDATE lib_series SET deleted_at = NULL WHERE id = $1', [existing.id]).catch(() => {});
   }
   if (existing && !existing.deleted_at && !opts.enqueueExisting) {
+    // Re-opening an item that was added before its remote catalog was fixed must also repair the chapter
+    // index. Without this, a one-shot could remain stuck at zero chapters forever because the duplicate
+    // fast-path returned before persisting the freshly fetched source chapter list.
+    if (chapters.length) {
+      const values = chapters.map((_, i) => `($1,$2,$${i * 5 + 3},$${i * 5 + 4},$${i * 5 + 5},$${i * 5 + 6},$${i * 5 + 7},'pending')`).join(',');
+      await q(
+        `INSERT INTO source_chapters (series_id, source_id, source_chapter_id, number, title, pages, published_at, status)
+         VALUES ${values}
+         ON CONFLICT (series_id, source_chapter_id) DO UPDATE SET number=EXCLUDED.number, title=EXCLUDED.title, pages=EXCLUDED.pages, published_at=EXCLUDED.published_at, updated_at=now()`,
+        [existing.id, source, ...chapters.flatMap((ch) => [ch.sourceId, ch.number, ch.title || null, ch.pages || null, ch.publishedAt || null])],
+      ).catch(() => {});
+      await q('UPDATE lib_series SET books_count = GREATEST(books_count, $2) WHERE id = $1', [existing.id, chapters.length]).catch(() => {});
+    }
     return { ok: true, status: 200, title, folder, chapters: 0, message: 'already in library', seriesId: existing.id };
   }
   if (!force) {
@@ -564,6 +577,10 @@ export default async function sourceRoutes(app: FastifyInstance) {
   /** The sources this viewer may reach, in registry order. */
   const reachable = (req: FastifyRequest): SourceAdapter[] =>
     listSources().filter((s) => sourceAllowedFor(s, vc(req).maxAgeRating));
+  const adultSourceZone = (req: FastifyRequest): boolean =>
+    (req.query as { adultSources?: string } | undefined)?.adultSources === '1';
+  const reachableForZone = (req: FastifyRequest): SourceAdapter[] =>
+    reachable(req).filter((s) => (!!s.isNsfw) === adultSourceZone(req));
 
   app.get('/api/sources', async (req) => {
     const health = new Map((await healthAll()).map((h) => [h.source_id, h]));
@@ -592,7 +609,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
     return {
       // An adult source is not merely hidden from the wall: it never appears in the list the client fans out
       // over, so a capped account cannot learn its id here and then ask for it directly.
-      content: reachable(req).map((s) => {
+      content: reachableForZone(req).map((s) => {
         const h = health.get(s.id);
         const blocked = !!(h?.blocked_until && new Date(h.blocked_until).getTime() > now);
         const suspect = (h?.empty_streak ?? 0) >= EMPTY_SUSPECT || (h?.slow_streak ?? 0) >= EMPTY_SUSPECT;
@@ -607,6 +624,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
         return {
           id: s.id,
           name: s.name,
+          adult: !!s.isNsfw,
           // null means "declares no single language", which is not the same as "serves none": a source
           // like MangaDex belongs in every group rather than in an orphan bucket. An adapter may now declare
           // one itself, which is how MangaDex -- hardcoded to ask for English -- stops joining all thirty.
@@ -643,9 +661,10 @@ export default async function sourceRoutes(app: FastifyInstance) {
   // called this one. Deleted rather than gated, because a second door to the same room is what went wrong.
 
   app.get('/api/sources/search', async (req, reply) => {
-    const { source, q: query } = req.query as { source?: string; q?: string };
+    const { source, q: query, adultSources } = req.query as { source?: string; q?: string; adultSources?: string };
     const src = source ? getSource(source) : null;
     if (!src || !query?.trim()) return { content: [] };
+    if ((!!src.isNsfw) !== (adultSources === '1')) return denySource(reply);
     if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
     const raw = await src.search(query.trim()).catch(() => []);
     // dedupe by sourceId (duplicate ids collide on the React key → wrong cover/title on a card)
@@ -698,7 +717,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
     // Candidates: the series' own source first (no cross-source guessing at all -- it is where the series
     // already comes from), then one best match per other reachable source.
     const terms = [...new Set([s.title, (altTitle || '').trim()].filter(Boolean))] as string[];
-    const allowed = new Set(reachable(req).map((x) => x.id));
+    const allowed = new Set(reachableForZone(req).map((x) => x.id));
     const found: { source: string; name: string; sourceId: string; title: string; coverUrl?: string; pinned: boolean }[] = [];
     if (s.source_id && s.source_series_id && allowed.has(s.source_id)) {
       const own = getSource(s.source_id);
@@ -926,9 +945,10 @@ export default async function sourceRoutes(app: FastifyInstance) {
 
   // Browse a source's newest / recently-updated series (no query). Same card shape as search.
   app.get('/api/sources/latest', async (req, reply) => {
-    const { source, page, lang } = req.query as { source?: string; page?: string; lang?: string };
+    const { source, page, lang, adultSources } = req.query as { source?: string; page?: string; lang?: string; adultSources?: string };
     const src = source ? getSource(source) : null;
     if (!src || typeof src.latest !== 'function') return { content: [] };
+    if ((!!src.isNsfw) !== (adultSources === '1')) return denySource(reply);
     // Refused by id, not merely hidden in the list. The web app is a static export, so a UI-only filter
     // would leave this returning twenty-four adult covers as JSON to a capped account holding the id.
     if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
@@ -958,9 +978,10 @@ export default async function sourceRoutes(app: FastifyInstance) {
    * the access checks harder to see rather than easier.
    */
   app.get('/api/sources/popular', async (req, reply) => {
-    const { source, page, lang } = req.query as { source?: string; page?: string; lang?: string };
+    const { source, page, lang, adultSources } = req.query as { source?: string; page?: string; lang?: string; adultSources?: string };
     const src = source ? getSource(source) : null;
     if (!src || typeof src.popular !== 'function') return { content: [] };
+    if ((!!src.isNsfw) !== (adultSources === '1')) return denySource(reply);
     if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
     if (await isDisabled(source!).catch(() => false)) return { content: [] };
     const p = Math.max(1, parseInt(page || '1', 10) || 1);

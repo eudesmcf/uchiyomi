@@ -11,6 +11,7 @@ import { useAuth, canDownload } from '@/lib/auth';
 import { Avatar } from './Avatar';
 import { useToast } from './Toast';
 import { keys, t as tr } from '@/lib/i18n';
+import { AdultSourcesLink } from './AdultToggle';
 
 // `keys()` is the identity function; it exists so these reach the translation extractor, which
 // cannot see a label rendered as `tr(label)`. This nav shipped untranslated once already.
@@ -62,6 +63,7 @@ export function TopNav({ onSearchFocus }: { onSearchFocus?: () => void }) {
             );
           })}
         </nav>
+        <AdultSourcesLink className="shrink-0" />
         <button type="button" onClick={onSearchFocus}
           className="ms-auto flex w-72 items-center gap-2 rounded-full border border-ink-700 bg-ink-850 px-3.5 py-2 text-start transition hover:border-accent/50">
           <IcSearch width={18} height={18} className="text-fog-500" />
