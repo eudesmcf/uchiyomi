@@ -55,6 +55,7 @@ function ReaderInner() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [chapterRefs, setChapterRefs] = useState<ChapterRef[]>([]);
   const [startPage, setStartPage] = useState(1);
+  const [progressReady, setProgressReady] = useState(false);
   const [ready, setReady] = useState(false);
   const [ended, setEnded] = useState(false); // reached the last chapter of the series → show Up Next
   /**
@@ -111,8 +112,14 @@ function ReaderInner() {
   useEffect(() => {
     let alive = true;
     setReady(false);
+    setProgressReady(false);
     setEnded(false);
+    setCurrent(0);
+    setStartPage(1);
+    setChapters([]);
+    setChapterRefs([]);
     didInitScroll.current = false;
+    scrollRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     completedSent.current.clear();
     prevPos.current = null;
     blobUrls.current.forEach((u) => URL.revokeObjectURL(u));
@@ -125,13 +132,16 @@ function ReaderInner() {
       const outcome = chapterOutcome(first);
       // `|| !first` is for the type narrower's benefit; chapterOutcome already answers 'unavailable' for null.
       if (outcome !== 'ok' || !first) { setFailed(outcome === 'ok' ? 'unavailable' : outcome); setReady(true); return; }
-      // resume page from live progress
+      // Read the new chapter's progress before mounting its pages. Keeping the previous chapter mounted
+      // while this request was in flight let its scroll position/current page leak into the new chapter.
+      let resumePage = 1;
       try {
         const b = await api<Book>(`/api/books/${bookId}`);
-        if (b.readProgress && !b.readProgress.completed) setStartPage(b.readProgress.page);
-        else setStartPage(1);
-      } catch { setStartPage(1); }
+        if (b.readProgress && !b.readProgress.completed) resumePage = b.readProgress.page;
+      } catch { /* a missing progress record means start at page one */ }
       if (!alive) return;
+      setStartPage(resumePage);
+      setProgressReady(true);
       setChapters([first]);
       if (first.offline && first.pages[0] && first.pages[0].width && first.pages[0].height) {
         // offline reading-direction hint not available here; keep current pref
@@ -266,15 +276,16 @@ function ReaderInner() {
 
   // ---- initial scroll to resume page ----
   useEffect(() => {
-    if (!ready || didInitScroll.current || !colW || !tops.length) return;
+    if (!ready || !progressReady || didInitScroll.current || !colW || !tops.length) return;
     const idx = Math.max(0, Math.min(flat.length - 1, startPage - 1));
-    if (prefs.mode === 'vertical' && scrollRef.current && idx > 0) scrollRef.current.scrollTop = tops[idx];
-    if (prefs.mode === 'paged' && scrollRef.current && idx > 0)
-      scrollRef.current.scrollLeft = (slideOf[idx] ?? idx) * scrollRef.current.clientWidth;
+    if (scrollRef.current) {
+      if (prefs.mode === 'vertical') scrollRef.current.scrollTo({ top: tops[idx] || 0, left: 0, behavior: 'auto' });
+      else scrollRef.current.scrollTo({ left: (slideOf[idx] ?? idx) * scrollRef.current.clientWidth, top: 0, behavior: 'auto' });
+    }
     setCurrent(idx);
     didInitScroll.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, colW, tops]);
+  }, [ready, progressReady, startPage, colW, tops]);
 
   // ---- track current page on scroll ----
   const onScroll = useCallback(() => {
