@@ -85,7 +85,7 @@ EXPOSE 3000
 # In embedded mode the database is part of "alive": the entrypoint leaves a marker next to the socket, and
 # the check asks Postgres too. With an external database the marker does not exist and this is /livez alone.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD sh -c 'wget -qO- http://127.0.0.1:3000/livez >/dev/null 2>&1 || exit 1; \
+  CMD sh -c 'wget -qO- "http://127.0.0.1:${PORT:-3000}/livez" >/dev/null 2>&1 || exit 1; \
     for d in /run/postgresql /tmp/pgsock; do [ -f "$d/.embedded" ] && { pg_isready -q -h "$d" -U yomi || exit 1; }; done; exit 0'
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]
