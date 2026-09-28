@@ -39,6 +39,12 @@ Os atalhos confirmados no Traefik/EasyPanel são:
 - Painel — https://painel.clinicamovikids.com.br
 - EasyPanel — https://easypanel.clinicamovikids.com.br
 
+## Capa do Renegade Immortal
+
+- Asset persistente: `/home/ubuntu/LOM/renegade-immortal-cover.jpg`
+- Caminho no container: `/data/renegade-immortal-cover.jpg`
+- O bot exibe a capa ao abrir os detalhes da obra e a mantém em cache no Telegram.
+
 ## Configuração persistente na VPS
 
 - Menu: `/home/ubuntu/regix-config/menus.yaml`
