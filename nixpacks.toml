@@ -20,3 +20,9 @@ cmd = "WEB_ROOT=/app/web/out /usr/local/n/versions/node/22.14.0/bin/node bff/dis
 
 [variables]
 WEB_ROOT = "/app/web/out"
+# EasyPanel builds this repository as a single Nixpacks app, so it does not read the
+# bundled docker-compose.yml (and therefore does not create the Suwayomi sidecar).
+# Keep the internal service address in the deployed build environment so an automatic
+# redeploy cannot silently turn the extension catalogue off again.
+SUWAYOMI_URL = "http://personal_suwayomi:4567"
+SUWAYOMI_MAX_SOURCES = "25"
