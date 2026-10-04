@@ -586,7 +586,12 @@ SET library_id = adult.id, age_rating = 18
 FROM libraries adult
 JOIN suwayomi_sources ss ON ss.nsfw = true
 WHERE adult.id = 'lib_adult'
-  AND (s.source_id = ss.source_id OR s.source_id = 'sw:' || ss.source_id)
+  AND (
+    s.source_id = ss.source_id
+    OR s.source_id = 'sw:' || ss.source_id
+    OR lower(s.source) = lower(ss.name)
+    OR lower(s.source_id) = lower(ss.name)
+  )
   AND s.library_id = 'lib'
   AND NOT s.library_pinned;
 
