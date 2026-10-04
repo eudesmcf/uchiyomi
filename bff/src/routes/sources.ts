@@ -311,6 +311,14 @@ export interface AddResult {
   seriesId?: string;
 }
 
+/** The adult shelf is created by migration and kept behind one lookup for source imports. */
+async function adultLibraryId(): Promise<string> {
+  const row = await one<{ id: string }>(
+    `SELECT id FROM libraries WHERE id = 'lib_adult' OR path = '18+' ORDER BY (id = 'lib_adult') DESC LIMIT 1`,
+  );
+  return row?.id ?? 'lib';
+}
+
 /** Add one series from a source to the library (downloads chapter 1 synchronously, the rest in background).
  *  Shared by POST /api/sources/add and the bulk importer. Returns a result instead of touching the reply. */
 export async function addSeriesFromSource(opts: {
@@ -349,12 +357,23 @@ export async function addSeriesFromSource(opts: {
     };
   }
   const folder = `${src.name}/${sanitize(title)}`;
+  const adult = !!src.isNsfw;
+  const libraryId = adult ? await adultLibraryId() : 'lib';
 
   // A deleted series does not count as present: re-adding it is how you undo a delete from the app side.
   const existing = await one<{ id: string; deleted_at: string | null }>(
     'SELECT id, deleted_at FROM lib_series WHERE folder = $1', [folder]);
   if (existing?.deleted_at) {
     await q('UPDATE lib_series SET deleted_at = NULL WHERE id = $1', [existing.id]).catch(() => {});
+  }
+  if (existing && adult) {
+    // Adult-source rows created before the dedicated shelf existed need the same repair as the migration.
+    // An explicit admin move remains authoritative.
+    await q(
+      `UPDATE lib_series SET library_id = $2, age_rating = 18
+       WHERE id = $1 AND library_id = 'lib' AND NOT library_pinned`,
+      [existing.id, libraryId],
+    ).catch(() => {});
   }
   if (existing && !existing.deleted_at && !opts.enqueueExisting) {
     // Re-opening an item that was added before its remote catalog was fixed must also repair the chapter
@@ -384,10 +403,10 @@ export async function addSeriesFromSource(opts: {
   const meta = { series: title, summary: series?.summary, author: series?.author, genres: series?.genres, url: series?.url, status: series?.status };
   const seriesRow = existing?.id ? { id: existing.id } : await one<{ id: string }>(
     `INSERT INTO lib_series (id, source, title, summary, author, status, genres, web, folder, books_count, library_id, age_rating, scanned_at, auto_update, source_id, source_series_id, source_language)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,'lib',NULL,now(),$10,$2,$11,$12)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,$11,now(),$12,$2,$13,$14)
      RETURNING id`,
     [newSeriesId(), src.name, title, series?.summary || null, series?.author || null, series?.status || null,
-      series?.genres || [], series?.url || null, folder, autoUpdate !== false, sourceId, language || null],
+      series?.genres || [], series?.url || null, folder, libraryId, adult ? 18 : null, autoUpdate !== false, sourceId, language || null],
   );
   if (seriesRow?.id) {
     await q(

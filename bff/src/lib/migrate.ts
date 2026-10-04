@@ -520,6 +520,14 @@ CREATE TABLE IF NOT EXISTS opds_tokens (
 -- anyone does, so without this the age limits shipped alongside are impractical on a real library.
 ALTER TABLE libraries ADD COLUMN IF NOT EXISTS age_rating int;
 
+-- Adult Suwayomi sources need a shelf of their own.  The web client already keeps libraries rated 18+
+-- hidden until the reader opts in; without a durable shelf, an adult source could be browsed but every
+-- title added from it landed in the ordinary library and the 18+ toggle had nothing to reveal.
+INSERT INTO libraries (id, name, path, sort_order, age_rating)
+SELECT 'lib_adult', '18+', '18+', 100, 18
+WHERE NOT EXISTS (SELECT 1 FROM libraries WHERE id = 'lib_adult' OR path = '18+');
+UPDATE libraries SET age_rating = 18 WHERE id = 'lib_adult' OR path = '18+';
+
 -- Why a series is in the library it is in. The scanner already keeps an existing series where it is, so a
 -- hand-move survives a rescan by accident; this records that it was DELIBERATE, so creating or re-pathing a
 -- library never steals it back and the UI can say "pinned here" rather than "here because of the folder".
@@ -570,6 +578,17 @@ CREATE TABLE IF NOT EXISTS suwayomi_sources (
 -- API. Without it there is no way to keep an age-capped account out of an adult source, and on a real
 -- install that is not a corner case: 36 of 44 enabled sources on the one this was written for are adult.
 ALTER TABLE suwayomi_sources ADD COLUMN IF NOT EXISTS nsfw boolean NOT NULL DEFAULT false;
+
+-- Repair rows created before adult sources had a dedicated shelf.  Respect an explicit admin move, but
+-- leave the default library behind for ordinary sources exactly as it was.
+UPDATE lib_series s
+SET library_id = adult.id, age_rating = 18
+FROM libraries adult
+JOIN suwayomi_sources ss ON ss.nsfw = true
+WHERE adult.id = 'lib_adult'
+  AND (s.source_id = ss.source_id OR s.source_id = 'sw:' || ss.source_id)
+  AND s.library_id = 'lib'
+  AND NOT s.library_pinned;
 
 
 -- OIDC identity linked to a local account. Kept alongside the password columns rather than replacing them,
