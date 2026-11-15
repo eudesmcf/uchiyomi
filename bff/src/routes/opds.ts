@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { q, one } from '../lib/db';
 import { resolveOpdsBasic } from '../lib/auth';
-import { viewCtxFor, visibleBookFile, Params, visible, browsable, type ViewCtx } from '../lib/visibility';
+import { viewCtxFor, visibleBookFile, Params, visible, browsable, type ViewCtx, adultOnly } from '../lib/visibility';
 import { LIBRARY_ROOT, cbzPageAt } from '../lib/library';
 import { serveImage } from '../lib/imageCache';
 const AdmZip = require('adm-zip');
@@ -139,7 +139,7 @@ export default async function opdsRoutes(app: FastifyInstance) {
     // a feed nobody can filter should not be the way adult titles get onto a device. `/opds/book/:id/file`
     // and page streaming still work either way, because by-id resolution goes through `visibleBookFile`,
     // which is `visible()` and not `browsable()`. The age CAP is a permission and is not affected by this.
-    (req as any).viewCtx = await viewCtxFor(who.userId, undefined, { hideAdult: !who.showAdult });
+    (req as any).viewCtx = await viewCtxFor(who.userId, undefined, { hideAdult: !who.showAdult, adultOnly: adultOnly(req) });
   });
 
   // root navigation feed

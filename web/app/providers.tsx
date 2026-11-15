@@ -66,18 +66,14 @@ export function Providers({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Capture the Android install prompt + flush the offline progress outbox when back online.
+  // Flush the offline progress outbox when back online. PWA installation is intentionally left to the
+  // browser's native install UI; intercepting beforeinstallprompt without an always-visible CTA produces
+  // Chrome's "Banner not shown" warning on every page.
   useEffect(() => {
-    const onPrompt = (e: Event) => {
-      e.preventDefault();
-      (window as any).__yomiInstall = e;
-    };
-    window.addEventListener('beforeinstallprompt', onPrompt);
     const flush = () => flushOutbox().catch(() => {});
     window.addEventListener('online', flush);
     const t = setTimeout(flush, 4000);
     return () => {
-      window.removeEventListener('beforeinstallprompt', onPrompt);
       window.removeEventListener('online', flush);
       clearTimeout(t);
     };

@@ -5,6 +5,7 @@ export interface ReaderPrefs {
   brightness: number; // 0.25 .. 1
   mode: 'vertical' | 'paged';
   autoScroll: number; // px/frame, 0 = off
+  playSeconds: number; // seconds between automatic page/view advances
   fitWidth: boolean;
   theme: ReaderTheme;
   spread: boolean; // paged mode: two pages side by side (manga double-page convention)
@@ -15,6 +16,7 @@ export const DEFAULT_PREFS: ReaderPrefs = {
   brightness: 1,
   mode: 'vertical',
   autoScroll: 0,
+  playSeconds: 5,
   fitWidth: true,
   theme: 'amoled',
   spread: false,

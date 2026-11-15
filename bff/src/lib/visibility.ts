@@ -40,6 +40,8 @@ export interface ViewCtx {
    * an older ViewCtx literal degrades to, so nothing silently starts filtering.
    */
   readonly hideAdultLibraries: boolean;
+  /** Restrict this request to adult-rated libraries/series only. */
+  readonly adultOnly: boolean;
 }
 
 /**
@@ -61,6 +63,11 @@ export class Params {
 export function visible(alias: string, ctx: ViewCtx, p: Params): string {
   const parts = [`${alias}.deleted_at IS NULL`, `${alias}.merged_into IS NULL`];
   if (ctx.libraryIds) parts.push(`${alias}.library_id = ANY(${p.add([...ctx.libraryIds])})`);
+  const eff = `COALESCE(
+    (SELECT o2.age_rating FROM series_overrides o2 WHERE o2.series_id = ${alias}.id),
+    ${alias}.age_rating,
+    (SELECT l2.age_rating FROM libraries l2 WHERE l2.id = ${alias}.library_id))`;
+  if (ctx.adultOnly) parts.push(`(${eff} >= ${ADULT_RATING})`);
   if (ctx.maxAgeRating !== null) {
     // The admin's override wins over what the scan read, like every other piece of series metadata. This is
     // a correlated subquery rather than a join because `visible()` is applied wherever `lib_series` appears
@@ -69,10 +76,6 @@ export function visible(alias: string, ctx: ViewCtx, p: Params): string {
     // Series override beats what the scan read, which beats the library's own rating. That last step is
     // what makes ratings usable: marking one library 18+ covers everything in it, and a single title inside
     // it can still be let through by rating it lower.
-    const eff = `COALESCE(
-      (SELECT o2.age_rating FROM series_overrides o2 WHERE o2.series_id = ${alias}.id),
-      ${alias}.age_rating,
-      (SELECT l2.age_rating FROM libraries l2 WHERE l2.id = ${alias}.library_id))`;
     // Unrated stays visible on purpose. Treating NULL as adults-only would empty most libraries the first
     // time anyone set a cap, and a parent would reasonably read that as the app being broken.
     parts.push(`(${eff} IS NULL OR ${eff} <= ${p.add(ctx.maxAgeRating)})`);
@@ -105,6 +108,7 @@ export const SYSTEM_CTX: ViewCtx = {
   userId: null, libraryIds: null, maxAgeRating: null,
   // Background work and admin reporting count what is there, not what someone wants on screen.
   hideAdultLibraries: false,
+  adultOnly: false,
 };
 
 /**
@@ -141,7 +145,12 @@ export function browsable(alias: string, ctx: ViewCtx, p: Params): string {
  * and it is the right default: a client that does not know about the filter should not defeat it.
  */
 export const hideAdult = (req: { query?: unknown }): boolean =>
-  (req.query as { adult?: string } | undefined)?.adult !== '1';
+  (req.query as { adult?: string; view?: string } | undefined)?.adult !== '1'
+  && (req.query as { view?: string } | undefined)?.view !== 'adult';
+
+/** Whether this request is operating inside the full adult application context. */
+export const adultOnly = (req: { query?: unknown }): boolean =>
+  (req.query as { view?: string } | undefined)?.view === 'adult';
 
 /**
  * Which of these series ids may be listed to this viewer.
@@ -221,15 +230,16 @@ export async function viewCtxFor(
    * admin short-circuit below: an admin is exempt from the age CAP because that is a permission, but they
    * asked for a tidy home screen like everyone else.
    */
-  opts?: { hideAdult?: boolean },
+  opts?: { hideAdult?: boolean; adultOnly?: boolean },
 ): Promise<ViewCtx> {
   const hideAdultLibraries = !!opts?.hideAdult;
+  const isAdultOnly = !!opts?.adultOnly;
   // Komga mode has its own libraries and its own restrictions, enforced by Komga. Do not pretend to enforce
   // a model this backend does not have. Only an EXPLICIT 'komga' takes this branch: with `!== 'owned'` an
   // unset or misspelled variable handed every account an unrestricted context on the path that governs page
   // bytes and OPDS downloads. Fail closed, into the restricted model below.
-  if (process.env.LIBRARY_BACKEND === 'komga') return { userId, libraryIds: null, maxAgeRating: null, hideAdultLibraries: false };
-  if (!userId || role === 'admin') return { userId, libraryIds: null, maxAgeRating: null, hideAdultLibraries };
+  if (process.env.LIBRARY_BACKEND === 'komga') return { userId, libraryIds: null, maxAgeRating: null, hideAdultLibraries: false, adultOnly: false };
+  if (!userId || role === 'admin') return { userId, libraryIds: null, maxAgeRating: null, hideAdultLibraries, adultOnly: isAdultOnly };
   // Deliberately NOT caught. Both restrictions are expressed by a NON-null value, so any fallback here is a
   // fallback to "unrestricted": `.catch(() => [])` collapsed through `rows.length ? ... : null` into
   // `libraryIds: null`, and `.catch(() => null)` into `maxAgeRating: null`. A database hiccup therefore handed
@@ -249,6 +259,7 @@ export async function viewCtxFor(
     libraryIds: rows.length ? rows.map((r) => r.library_id) : null,
     maxAgeRating: cap?.max_age_rating ?? null,
     hideAdultLibraries,
+    adultOnly: isAdultOnly,
   };
 }
 

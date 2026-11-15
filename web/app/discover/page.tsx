@@ -16,9 +16,10 @@ import { SourcePicker, SourceLatest, Src, SrcState } from '@/components/SourcePi
 import { budgetForMode, type ListMode } from '@/lib/sourceGroups';
 import { AddSeriesDialog, AddSeed } from '@/components/AddSeriesDialog';
 import { IcChevronLeft, IcSearch, IcSparkle, IcX } from '@/components/icons';
+import { useAdultMode } from '@/components/AdultToggle';
 
 interface Job { folder: string; title: string; total: number; done: number; status: string; reason?: string }
-interface SearchGroup { title: string; coverUrl?: string; inLibrary?: boolean; updatedAt?: string; providers: { source: string; name: string; sourceId: string; title: string; coverUrl?: string; lang?: string }[] }
+interface SearchGroup { title: string; coverUrl?: string; author?: string; inLibrary?: boolean; updatedAt?: string; providers: { source: string; name: string; sourceId: string; title: string; coverUrl?: string; author?: string; lang?: string }[] }
 
 /**
  * How many titles the hero rotates through.
@@ -30,6 +31,35 @@ const HERO_SLIDES = 10;
 
 /** Titles compare the way the server compares them, so a card can flip to "in library" with no refetch. */
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+/** Hitomi sometimes returns its gender facets as symbols or English prefixes. Keep the raw value for
+ * filtering, but make the badge readable instead of exposing the source's shorthand in the UI. */
+const genreLabel = (value: string) => {
+  const trimmed = value.trim();
+  if (/^(?:♂|male)$/i.test(trimmed)) return 'Masculino';
+  if (/^(?:♀|female)$/i.test(trimmed)) return 'Feminino';
+  const male = trimmed.match(/^(?:♂|male)\s*[:\-]?\s*(.+)$/i);
+  if (male) return `Masculino · ${male[1]}`;
+  const female = trimmed.match(/^(?:♀|female)\s*[:\-]?\s*(.+)$/i);
+  if (female) return `Feminino · ${female[1]}`;
+  const translations: Record<string, string> = {
+    'anal': 'Anal', 'ahegao': 'Ahegao', 'animated': 'Animado', 'anthology': 'Antologia',
+    'apron': 'Avental', 'artistcg': 'CG de artista', 'bbw': 'Mulheres gordas', 'big breasts': 'Seios grandes',
+    'big penis': 'Pênis grande', 'bondage': 'Bondage', 'breast expansion': 'Aumento dos seios',
+    'cheating': 'Traição', 'cosplay': 'Cosplay', 'cunnilingus': 'Sexo oral feminino', 'drugs': 'Drogas',
+    'femdom': 'Dominação feminina', 'furry': 'Furry', 'group': 'Grupo', 'incest': 'Incesto',
+    'interracial': 'Interracial', 'lactation': 'Lactação', 'maid': 'Empregada', 'milf': 'MILF',
+    'mind break': 'Colapso mental', 'monster': 'Monstro', 'nurse': 'Enfermeira', 'office lady': 'Secretária',
+    'orc': 'Orc', 'paizuri': 'Paizuri', 'pregnant': 'Grávida', 'schoolgirl': 'Estudante',
+    'shota': 'Shota', 'squirting': 'Esguicho', 'swimsuit': 'Maiô', 'teacher': 'Professora',
+    'tentacles': 'Tentáculos', 'threesome': 'Trisal', 'tomgirl': 'Tomgirl', 'unscensored': 'Sem censura',
+    'vanilla': 'Romance', 'webtoon': 'Webtoon', 'yuri': 'Yuri',
+  };
+  return translations[trimmed.toLowerCase()] || trimmed;
+};
+
+/** Yaoi is intentionally excluded from the adult Discover taxonomy and result pool for this account. */
+const isExcludedGenre = (value: string) => /^(?:yaoi|boys?[- ]love|shounen[- ]?ai)(?:\s*[:/].*)?$/i.test(value.trim());
 
 /**
  * Discover, rebuilt around what people actually do here.
@@ -53,14 +83,15 @@ export default function DiscoverPage() {
   const toast = useToast();
   const qc = useQueryClient();
   const { user, isAdmin } = useAuth();
+  const adult = useAdultMode();
 
   // Not fired at all for an account that may not add series: every route behind this page answers 403 for
   // them, and a query whose only possible outcome is a refusal is noise in the console and in the log.
   const mayAdd = canDownload(user);
 
   const { data: sourcesData } = useQuery({
-    queryKey: ['sources'],
-    queryFn: () => api<{ content: Src[] }>('/api/sources'),
+    queryKey: ['sources', adult ? 'adult' : 'normal'],
+    queryFn: () => api<{ content: Src[] }>(adult ? '/api/sources?adultSources=1' : '/api/sources'),
     enabled: mayAdd,
     staleTime: 30_000,
     refetchInterval: 60_000,
@@ -74,9 +105,45 @@ export default function DiscoverPage() {
     // hero threw on `genres.slice`. A direct page load was fine, which is why it looked intermittent.
     queryKey: ['discover-trending'],
     queryFn: () => api<{ content: Trending[] }>('/api/discover/trending'),
-    enabled: mayAdd,
+    enabled: mayAdd && !adult,
     staleTime: 0,
     refetchOnMount: 'always',
+  });
+
+  // Portuguese is the app's content-language default; the UI locale remains independently configurable.
+  const [sourceLang, setSourceLang] = useState('pt-br');
+
+  // In adult mode the public AniList trend feed is intentionally not used: it is a normal-content feed and
+  // its banners are not an adult catalogue. Hitomi is the adult source with the useful tag vocabulary, so its
+  // own latest feed becomes the adult hero and category pool.
+  const hitomi = useMemo(() => {
+    const candidates = sources.filter((s) => /hitomi/i.test(s.name));
+    if (!candidates.length) return null;
+    const wanted = sourceLang.toLowerCase().split('-')[0];
+    return candidates.find((s) => (s.lang || '').toLowerCase().split('-')[0] === wanted) || candidates[0];
+  }, [sources, sourceLang]);
+  const { data: hitomiLatest } = useQuery({
+    queryKey: ['adult-hitomi-latest', hitomi?.id, sourceLang],
+    // Hitomi's tags are attached to each gallery rather than exposed as a separate taxonomy endpoint. Read a
+    // few cached listing pages so the category picker is not accidentally limited to the first 24 titles.
+    queryFn: async () => {
+      const pages = await Promise.all(Array.from({ length: 6 }, (_, i) =>
+        api<{ content: SourceItem[] }>(`/api/sources/latest?adultSources=1&source=${encodeURIComponent(hitomi!.id)}&page=${i + 1}${sourceLang !== 'all' ? `&lang=${encodeURIComponent(sourceLang)}` : ''}`),
+      ));
+      const seen = new Set<string>();
+      return { content: pages.flatMap((page) => page.content ?? []).filter((item) => {
+        const key = `${item.source}:${item.sourceId}`;
+        return !seen.has(key) && (seen.add(key), true);
+      }) };
+    },
+    enabled: adult && mayAdd && !!hitomi,
+    staleTime: 60_000,
+  });
+  const { data: hitomiTags } = useQuery({
+    queryKey: ['adult-hitomi-tags', hitomi?.id],
+    queryFn: () => api<{ content: { value: string; count: number }[] }>(`/api/sources/tags?adultSources=1&source=${encodeURIComponent(hitomi!.id)}`),
+    enabled: adult && mayAdd && !!hitomi,
+    staleTime: 6 * 60 * 60_000,
   });
 
   // ---------------------------------------------------------------- the wall
@@ -88,9 +155,7 @@ export default function DiscoverPage() {
    * sort within browsing.
    */
   const [listMode, setListMode] = useState<ListMode>('newest');
-  // Portuguese is the app's content-language default; the UI locale remains independently configurable.
-  const [sourceLang, setSourceLang] = useState('pt-br');
-  const [genre, setGenre] = useState('');
+  const [genres, setGenres] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
@@ -101,6 +166,22 @@ export default function DiscoverPage() {
   const [searching, setSearching] = useState(false);
   const [seed, setSeed] = useState<AddSeed | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
+  const [hiddenGenres, setHiddenGenres] = useState<string[]>(['yaoi']);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('yomi_adult_hidden_genres') || 'null');
+      if (Array.isArray(saved)) setHiddenGenres(saved.filter((v): v is string => typeof v === 'string'));
+    } catch { /* use the safe default */ }
+  }, []);
+  const toggleHiddenGenre = (value: string) => setHiddenGenres((current) => {
+    const key = value.toLowerCase();
+    const next = current.some((v) => v.toLowerCase() === key)
+      ? current.filter((v) => v.toLowerCase() !== key)
+      : [...current, value];
+    localStorage.setItem('yomi_adult_hidden_genres', JSON.stringify(next));
+    return next;
+  });
 
   const languageBase = (value?: string | null) => value?.trim().toLowerCase().replace('_', '-').split('-')[0] ?? '';
 
@@ -118,14 +199,28 @@ export default function DiscoverPage() {
   }, [sources]);
   const genreOptions = useMemo(() => {
     const genres = new Set<string>();
-    for (const item of trending?.content ?? []) for (const value of item.genres ?? []) if (value.trim()) genres.add(value.trim());
+    if (adult && hitomiTags?.content?.length) {
+      for (const tag of hitomiTags.content) if (tag.value.trim() && !isExcludedGenre(tag.value)) genres.add(tag.value.trim());
+      return [...genres].sort((a, b) => a.localeCompare(b));
+    }
+    const pool = adult ? (hitomiLatest?.content ?? []) : (trending?.content ?? []);
+    for (const item of pool) for (const value of item.genres ?? []) if (value.trim() && (!adult || !isExcludedGenre(value))) genres.add(value.trim());
     return [...genres].sort((a, b) => a.localeCompare(b));
-  }, [trending]);
-  const filteredTrending = useMemo(() => {
-    if (!genre) return trending?.content ?? [];
-    return (trending?.content ?? []).filter((item) => item.genres?.some((value) => value.toLowerCase() === genre.toLowerCase()));
-  }, [trending, genre]);
-  const categoryActive = mode === 'newest' && Boolean(genre);
+  }, [adult, hitomiLatest, trending]);
+  const hidden = useMemo(() => new Set(hiddenGenres.map((v) => v.toLowerCase())), [hiddenGenres]);
+  const allowedByPreference = useCallback((item: { genres?: string[] }) =>
+    !adult || (!(item.genres ?? []).some(isExcludedGenre) && !(item.genres ?? []).some((g) => hidden.has(g.toLowerCase()))), [adult, hidden]);
+  const adultTrending = useMemo<Trending[]>(() => (hitomiLatest?.content ?? []).map((item) => ({
+    title: item.title, cover: item.coverUrl || null, banner: null, description: '', genres: item.genres || [],
+    score: null, chapters: null, status: null,
+  })), [hitomiLatest]);
+  const filteredTrending = useMemo<Trending[]>(() => {
+    const pool = adult ? adultTrending : (trending?.content ?? []);
+    return pool.filter((item) => allowedByPreference(item) && (!genres.length || item.genres?.some((value) => genres.some((selected) => value.toLowerCase() === selected.toLowerCase()))));
+  }, [adult, adultTrending, allowedByPreference, genres, trending]);
+  const categoryActive = mode === 'newest' && genres.length > 0;
+  const categoryPreview = genreOptions.slice(0, 8);
+  const categoryOverflow = genreOptions.slice(8);
   const filteredSources = useMemo(() => {
     if (sourceLang === 'all') return sources;
     const wanted = languageBase(sourceLang);
@@ -206,27 +301,28 @@ export default function DiscoverPage() {
     }
     return out;
   }, [mode, listMode, selected, searchHits, order, byId]);
+  const visibleWall = useMemo(() => wall.filter(allowedByPreference), [wall, allowedByPreference]);
 
   const nameOf = useCallback((id: string) => sources.find((s) => s.id === id)?.name, [sources]);
   const pending = categoryActive ? 0 : mode === 'newest' ? Math.max(0, budget.length - settled) : (searching ? 3 : 0);
 
-  const search = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    const term = q.trim();
+  const runSearch = async (term: string) => {
     if (!term) return;
-    setGenre('');
+    setGenres([]);
     setMode('search'); setSearching(true); setSearchHits([]);
     try {
       const r = await api<{ content: SearchGroup[] }>(`/api/sources/search-all?q=${encodeURIComponent(term)}`);
       setSearchHits((r.content ?? []).map((g) => ({
         source: g.providers[0]?.source ?? '', sourceId: g.providers[0]?.sourceId ?? g.title,
-        title: g.title, coverUrl: g.coverUrl, updatedAt: g.updatedAt, lang: sourceLang,
+        title: g.title, author: g.author, coverUrl: g.coverUrl, updatedAt: g.updatedAt, lang: sourceLang,
         inLibrary: g.inLibrary, providerCount: g.providers.length,
       })));
       (r.content ?? []).forEach((g) => { (groupsRef.current as any)[norm(g.title)] = g.providers; });
     } catch { toast(tr('Search failed'), 'error'); }
     setSearching(false);
   };
+  const search = async (e?: React.FormEvent) => { e?.preventDefault(); await runSearch(q.trim()); };
+  const searchAuthor = (author: string) => { setQ(author); void runSearch(author.trim()); };
   const groupsRef = useRef<Record<string, SearchGroup['providers']>>({});
   const backToNewest = () => { setQ(''); setMode('newest'); setSearchHits([]); };
   const changeSourceLanguage = (next: string) => {
@@ -238,8 +334,8 @@ export default function DiscoverPage() {
     setOrder([]);
     setStates({});
   };
-  const changeGenre = (next: string) => {
-    setGenre(next);
+  const toggleGenre = (value: string) => {
+    setGenres((current) => current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);
     setMode('newest');
     setSelected(null);
     setPage(1);
@@ -328,7 +424,7 @@ export default function DiscoverPage() {
   return (
     <div className="min-h-screen-d px-4 lg:px-0">
       {heroSlides.length > 0 && mode === 'newest' && (
-        <DiscoverHero key={genre || 'all'} slides={heroSlides} onPick={(t) => setSeed({ kind: 'trending', title: t.title })} />
+        <DiscoverHero key={genres.join('|') || 'all'} slides={heroSlides} onPick={(t) => setSeed({ kind: 'trending', title: t.title })} />
       )}
 
       <header className="pt-5 lg:pt-7">
@@ -336,7 +432,7 @@ export default function DiscoverPage() {
           <div className="min-w-0">
             <h1 className="font-display text-2xl font-bold tracking-tight lg:text-3xl">{tr('Discover')}</h1>
             <p className="mt-0.5 text-sm text-fog-400">
-              {categoryActive ? `${tr('Recommendations by category')} · ${genre}` : tr('Newest from your sources')}
+              {categoryActive ? `${tr('Recommendations by category')} · ${genres.map(genreLabel).join(' · ')}` : tr('Newest from your sources')}
             </p>
           </div>
           <label className="field flex items-center gap-2 py-0 text-sm">
@@ -356,16 +452,25 @@ export default function DiscoverPage() {
               })}
             </select>
           </label>
-          {genreOptions.length > 0 && (
-            <label className="field flex items-center gap-2 py-0 text-sm">
-              <span className="text-xs text-fog-500">{tr('Category')}</span>
-              <select value={genre} onChange={(e) => changeGenre(e.target.value)}
-                className="max-w-[10rem] cursor-pointer bg-ink-800 py-2.5 text-fog-100 outline-none [color-scheme:dark]"
-                style={{ colorScheme: 'dark' }} aria-label={tr('Category')}>
-                <option value="">{tr('All categories')}</option>
-                {genreOptions.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
-            </label>
+          {adult && genreOptions.length > 0 && (
+            <details className="relative w-full sm:w-auto">
+              <summary className="chip inline-flex cursor-pointer list-none text-xs">
+                {tr('Preferences')}{hiddenGenres.length ? ` · ${hiddenGenres.length} hidden` : ''}
+              </summary>
+              <div className="absolute end-0 top-full z-30 mt-2 w-72 rounded-2xl border border-rose-400/25 bg-ink-900/95 p-3 shadow-2xl backdrop-blur-xl">
+                <p className="text-xs font-semibold text-fog-200">{tr('Hide categories you do not want')}</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-fog-500">{tr('Hidden categories stay out of the adult hero and results on this device.')}</p>
+                <div className="mt-3 flex max-h-48 flex-wrap gap-1.5 overflow-auto">
+                  {genreOptions.map((value) => {
+                    const checked = hidden.has(value.toLowerCase());
+                    return <button key={value} type="button" onClick={() => toggleHiddenGenre(value)}
+                      className={`chip text-[11px] ${checked ? 'border-rose-300/70 bg-rose-400/15 text-rose-200' : ''}`} aria-pressed={checked}>
+                      {checked ? '× ' : ''}{genreLabel(value)}
+                    </button>;
+                  })}
+                </div>
+              </div>
+            </details>
           )}
           <form onSubmit={search} className="flex w-full items-center gap-2 sm:w-auto">
             <div className="field flex min-w-0 flex-1 items-center gap-2 py-0 sm:w-72 lg:w-80">
@@ -383,6 +488,42 @@ export default function DiscoverPage() {
             <button className="btn-accent shrink-0 px-5 py-2.5 text-sm">{tr('Search')}</button>
           </form>
         </div>
+        {genreOptions.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-1.5" aria-label={tr('Category')}>
+            <span className="me-1 text-xs font-semibold uppercase tracking-[0.12em] text-fog-500">{tr('Category')}</span>
+            <button type="button" onClick={() => { setGenres([]); setMode('newest'); setSelected(null); setPage(1); }} aria-pressed={!genres.length}
+              className={`chip text-xs ${!genres.length ? 'chip-active' : ''}`}>
+              {tr('All categories')}
+            </button>
+            {categoryPreview.map((value) => (
+              <button key={value} type="button" onClick={() => toggleGenre(value)}
+                aria-pressed={genres.includes(value)} title={value}
+                className={`chip max-w-[15rem] text-xs ${genres.includes(value) ? 'chip-active' : ''}`}>
+                <span className="truncate">{genreLabel(value)}{hitomiTags?.content.find((tag) => tag.value === value)?.count ? ` · ${hitomiTags.content.find((tag) => tag.value === value)?.count}` : ''}</span>
+              </button>
+            ))}
+            {categoryOverflow.length > 0 && (
+              <details className="relative">
+                <summary className="chip inline-flex cursor-pointer list-none text-xs" aria-label={tr('More categories')}>
+                  …{genres.filter((value) => categoryOverflow.includes(value)).length ? ` · ${genres.filter((value) => categoryOverflow.includes(value)).length}` : ''}
+                </summary>
+                <div className="absolute start-0 top-full z-30 mt-2 w-80 rounded-2xl border border-ink-700 bg-ink-900/95 p-3 shadow-2xl backdrop-blur-xl">
+                  <p className="text-xs font-semibold text-fog-200">{tr('More categories')}</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-fog-500">{tr('Select one or more categories')}</p>
+                  <div className="mt-3 flex max-h-56 flex-wrap gap-1.5 overflow-auto">
+                    {categoryOverflow.map((value) => (
+                      <button key={value} type="button" onClick={() => toggleGenre(value)}
+                        aria-pressed={genres.includes(value)} title={value}
+                        className={`chip text-[11px] ${genres.includes(value) ? 'chip-active' : ''}`}>
+                        {genreLabel(value)}{hitomiTags?.content.find((tag) => tag.value === value)?.count ? ` · ${hitomiTags.content.find((tag) => tag.value === value)?.count}` : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </details>
+            )}
+          </div>
+        )}
       </header>
 
       {mode === 'newest' && !categoryActive && (
@@ -390,7 +531,7 @@ export default function DiscoverPage() {
           sources={budget} states={states} settled={settled} total={budget.length}
           selected={selected} onSelect={setSelected}
           mode={listMode}
-          onMode={(m) => { setListMode(m); setSelected(null); setPage(1); }}
+          onMode={(m) => { setListMode(m); setGenres([]); setSelected(null); setPage(1); }}
         />
       )}
 
@@ -429,7 +570,7 @@ export default function DiscoverPage() {
 
       <div className="mb-3 mt-6 flex items-baseline justify-between gap-3">
         <h2 className="font-display text-lg font-semibold tracking-tight text-fog-50 lg:text-xl">
-          {mode === 'search' ? tr('Results across your sources') : categoryActive ? `${tr('Recommendations by category')} · ${genre}` : tr('Newest from your sources')}
+          {mode === 'search' ? tr('Results across your sources') : categoryActive ? `${tr('Recommendations by category')} · ${genres.map(genreLabel).join(' · ')}` : tr('Newest from your sources')}
         </h2>
         {mode === 'search' ? (
           <button onClick={backToNewest} className="chip shrink-0 text-xs">
@@ -452,8 +593,8 @@ export default function DiscoverPage() {
         </div>
       ) : (
         <div className="grid grid-cols-3 gap-x-3 gap-y-5 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 lg:gap-x-4 xl:grid-cols-8 2xl:grid-cols-9 min-[1800px]:grid-cols-10">
-          {wall.map((it, i) => (
-            <SourceCard key={`${it.source}:${it.sourceId}`} item={{ ...it, inLibrary: it.inLibrary || added.has(norm(it.title)) }}
+          {visibleWall.map((it, i) => (
+            <SourceCard key={`${it.source}:${it.sourceId}`} item={{ ...it, inLibrary: it.inLibrary || added.has(norm(it.title)) }} onAuthor={searchAuthor}
               sourceName={mode === 'newest' && order.length > 1 ? nameOf(it.source) : undefined}
               onAdd={() => open(it)} eager={i < 12} />
           ))}
@@ -463,7 +604,7 @@ export default function DiscoverPage() {
         </div>
       )}
 
-      {!categoryActive && !wall.length && !pending && (
+      {!categoryActive && !visibleWall.length && !pending && (
         <div className="card col-span-full mt-2 p-8 text-center">
           <p className="text-sm text-fog-400">
             {mode === 'search' ? tr('No results across your sources — try another title.')
@@ -485,7 +626,7 @@ export default function DiscoverPage() {
       {mode === 'newest' && !categoryActive && rail.length > 0 && (
         <section className="pb-6">
           <h2 className="mb-3 font-display text-lg font-semibold tracking-tight text-fog-50 lg:text-xl">
-            {genre ? `${tr('Trending manhwa')} · ${genre}` : tr('Trending manhwa')}
+            {genres.length ? `${tr('Trending manhwa')} · ${genres.map(genreLabel).join(' · ')}` : tr('Trending manhwa')}
           </h2>
           {/* pb-3 rather than pb-1: the global scrollbar is 8px and used to be hidden, so the rail had no
               room for it and it would have sat on the card captions. */}

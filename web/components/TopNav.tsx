@@ -11,7 +11,7 @@ import { useAuth, canDownload } from '@/lib/auth';
 import { Avatar } from './Avatar';
 import { useToast } from './Toast';
 import { keys, t as tr } from '@/lib/i18n';
-import { AdultSourcesLink } from './AdultToggle';
+import { AdultExit, AdultSourcesLink, useAdultMode } from './AdultToggle';
 
 // `keys()` is the identity function; it exists so these reach the translation extractor, which
 // cannot see a label rendered as `tr(label)`. This nav shipped untranslated once already.
@@ -32,6 +32,7 @@ export function TopNav({ onSearchFocus }: { onSearchFocus?: () => void }) {
   const toast = useToast();
   const { user } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
+  const adult = useAdultMode();
   const { data: upd } = useQuery({ queryKey: ['updates'], queryFn: () => api<{ content: any[] }>('/api/updates'), staleTime: 120000 });
   const updCount = upd?.content?.length ?? 0;
 
@@ -51,19 +52,21 @@ export function TopNav({ onSearchFocus }: { onSearchFocus?: () => void }) {
   return (
     <header className="sticky top-0 z-40 hidden border-b border-ink-800/70 bg-ink-950/80 backdrop-blur-xl lg:block">
       <div className="shell flex items-center gap-6 py-3">
-        <Link href="/"><Lockup className="text-2xl" markSize={38} /></Link>
+        <Link href={adult ? '/adult/' : '/'}><Lockup className="text-2xl" markSize={38} /></Link>
+        {adult && <span className="rounded-full border border-rose-400/40 bg-rose-400/10 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-rose-200">18+ MODE</span>}
         <nav className="flex items-center gap-1">
           {(canDownload(user) ? links : links.filter((l) => l.href !== '/discover')).map(({ href, label, Icon, match }) => {
-            const active = match(path);
+            const active = adult && href === '/' ? path.startsWith('/adult') : match(path);
+            const target = adult && href === '/' ? '/adult/' : href;
             return (
-              <Link key={href} href={href}
+              <Link key={href} href={target}
                 className={`flex items-center gap-2 whitespace-nowrap rounded-full px-3.5 py-2 text-sm font-medium transition ${active ? 'bg-accent-soft text-accent' : 'text-fog-400 hover:text-fog-100'}`}>
                 <Icon width={18} height={18} /> {tr(label)}
               </Link>
             );
           })}
         </nav>
-        <AdultSourcesLink className="shrink-0" />
+        {adult ? <AdultExit className="shrink-0" /> : <AdultSourcesLink className="shrink-0" />}
         <button type="button" onClick={onSearchFocus}
           className="ms-auto flex w-72 items-center gap-2 rounded-full border border-ink-700 bg-ink-850 px-3.5 py-2 text-start transition hover:border-accent/50">
           <IcSearch width={18} height={18} className="text-fog-500" />

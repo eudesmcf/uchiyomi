@@ -58,9 +58,9 @@ export type SrcState = 'ok' | 'empty' | 'idle' | 'blocked';
  * extension sources with no series behind any of them, while Aqua Manga -- 189 of that library's 214 series,
  * answering in 2.5s -- was never among the six. Ranking by what someone demonstrably reads from fixed it.
  */
-export function budgetFor(sources: Src[], max = 6): Src[] {
+export function budgetFor(sources: Src[], max = 6, requireLatest = true): Src[] {
   return sources
-    .filter((s) => s.latest && s.status !== 'disabled')
+    .filter((s) => (requireLatest ? s.latest : (s.latest || s.popular)) && s.status !== 'disabled')
     .sort((a, b) =>
       Number(a.status !== 'ok') - Number(b.status !== 'ok') ||
       (b.used ?? 0) - (a.used ?? 0))
@@ -94,7 +94,7 @@ export function retryIn(src: Src, now = Date.now()): string | null {
 }
 
 /** Which listing the wall is showing. The source's own ranking, never one we compute. */
-export type ListMode = 'newest' | 'popular';
+export type ListMode = 'newest' | 'popular' | 'all';
 
 /**
  * Sources worth asking for the mode currently selected.
@@ -103,7 +103,9 @@ export type ListMode = 'newest' | 'popular';
  * already does -- showing a chip that can never fill would be worse than showing one fewer chip.
  */
 export function budgetForMode(sources: Src[], mode: ListMode, max = 6): Src[] {
-  return budgetFor(mode === 'popular' ? sources.filter((s) => s.popular) : sources, max);
+  if (mode === 'popular') return budgetFor(sources.filter((s) => s.popular), max, false);
+  if (mode === 'all') return budgetFor(sources, max, false);
+  return budgetFor(sources, max);
 }
 
 /** Where the browser can find a source's icon. The route answers 404 when there is none; the tile covers it. */

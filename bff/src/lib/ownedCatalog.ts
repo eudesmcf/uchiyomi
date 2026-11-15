@@ -301,10 +301,11 @@ export const owned = {
     const allowed = ctx.maxAgeRating === null
       ? held
       : held.filter((r) => r.age_rating === null || r.age_rating <= ctx.maxAgeRating!);
+    const inMode = ctx.adultOnly ? allowed.filter((r) => (r.age_rating ?? 0) >= ADULT_RATING) : allowed;
     // `adult` rides along rather than being filtered out here: the web app needs to know an 18+ library
     // EXISTS in order to offer the button that reveals it, and it hides those tabs itself while the filter
     // is on. What must not leak is the CONTENT, and that is `browsable()`'s job, not this list's.
-    return allowed.map((r) => ({ id: r.id, name: r.name, adult: (r.age_rating ?? 0) >= ADULT_RATING }));
+    return inMode.map((r) => ({ id: r.id, name: r.name, adult: (r.age_rating ?? 0) >= ADULT_RATING }));
   },
 
   /**

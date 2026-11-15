@@ -182,6 +182,18 @@ function LibraryInner() {
     } catch { toast('Could not apply that', 'error'); }
     setActing(false);
   };
+  const moveToTrash = async () => {
+    if (!picked.size || !window.confirm(`Mover ${picked.size} série${picked.size === 1 ? '' : 's'} para a lixeira?`)) return;
+    setActing(true);
+    try {
+      const results = await Promise.all([...picked].map((id) => api(`/api/admin/series/${encodeURIComponent(id)}`, { method: 'DELETE' })));
+      void results;
+      toast(`${picked.size} movida${picked.size === 1 ? '' : 's'} para a lixeira`, 'success');
+      setSelecting(false); setPicked(new Set());
+      qc.invalidateQueries({ queryKey: ['library'] }); qc.invalidateQueries({ queryKey: ['home'] });
+    } catch { toast('Não foi possível mover todas as séries para a lixeira', 'error'); }
+    setActing(false);
+  };
 
   const sentinel = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -289,7 +301,8 @@ function LibraryInner() {
           ? Array.from({ length: 14 }).map((_, i) => <div key={i} className="skeleton aspect-[2/3] rounded-2xl" />)
           : items.map((s, i) => (
               <SeriesTile key={s.id} series={s} eager={i < 12}
-                selectable={selecting} selected={picked.has(s.id)} onToggle={() => togglePick(s.id)} />
+                selectable={selecting} selected={picked.has(s.id)} onToggle={() => togglePick(s.id)}
+                onLongPress={isAdmin ? () => { setSelecting(true); togglePick(s.id); } : undefined} />
             ))}
       </div>
 
@@ -308,6 +321,7 @@ function LibraryInner() {
             <button disabled={acting} onClick={() => bulk('/api/library/bulk/read', { completed: false })} className="chip text-xs disabled:opacity-50">{tr('Mark unread')}</button>
             <button disabled={acting} onClick={() => bulk('/api/favorites/bulk', { favorite: true })} className="chip text-xs disabled:opacity-50">{tr('Favourite')}</button>
             {isAdmin && <button disabled={acting} onClick={() => setMoving(true)} className="chip text-xs disabled:opacity-50">{tr('Move to library')}</button>}
+            {isAdmin && <button disabled={acting} onClick={moveToTrash} className="chip border-rose-400/40 text-xs text-rose-200 disabled:opacity-50">Lixeira</button>}
             <button onClick={() => { setSelecting(false); setPicked(new Set()); }} className="chip text-xs text-fog-500">{tr('Cancel')}</button>
           </div>
         </div>

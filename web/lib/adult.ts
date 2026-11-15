@@ -21,11 +21,18 @@
  * be replayed the first time the network hiccups. A different URL is a different cache entry, for free.
  */
 const COOKIE = 'yomi_adult';
+const MODE_COOKIE = 'yomi_adult_mode';
 
 /** Read straight from document.cookie every time: another tab may have changed it since this one loaded. */
 export function adultShown(): boolean {
   if (typeof document === 'undefined') return false;
   return document.cookie.split('; ').some((c) => c === `${COOKIE}=1`);
+}
+
+/** Full-app adult context. Unlike the legacy reveal, this changes every API read to adult-only. */
+export function adultMode(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.cookie.split('; ').some((c) => c === `${MODE_COOKIE}=1`);
 }
 
 /**
@@ -50,6 +57,15 @@ export function setAdultShown(on: boolean): void {
   listeners.forEach((f) => f());
 }
 
+export function setAdultMode(on: boolean): void {
+  if (typeof document === 'undefined') return;
+  const secure = typeof location !== 'undefined' && location.protocol === 'https:' ? '; secure' : '';
+  document.cookie = on
+    ? `${MODE_COOKIE}=1; path=/; samesite=lax${secure}`
+    : `${MODE_COOKIE}=; path=/; max-age=0; samesite=lax${secure}`;
+  listeners.forEach((f) => f());
+}
+
 /**
  * Add the reveal to a request URL, when it is on.
  *
@@ -57,6 +73,7 @@ export function setAdultShown(on: boolean): void {
  * cached is invalidated by shipping this.
  */
 export function withAdult(path: string): string {
+  if (adultMode()) return `${path}${path.includes('?') ? '&' : '?'}view=adult`;
   if (!adultShown()) return path;
   return `${path}${path.includes('?') ? '&' : '?'}adult=1`;
 }

@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { adultShown, setAdultShown, onAdultChange } from '@/lib/adult';
+import { adultMode, setAdultMode, onAdultChange } from '@/lib/adult';
+import { useRouter } from 'next/navigation';
 import { t as tr } from '@/lib/i18n';
 import Link from 'next/link';
 import type { Src } from '@/lib/sourceGroups';
@@ -19,13 +20,13 @@ export function useLibraries() {
 }
 
 /** Whether 18+ is currently revealed, kept in sync with the cookie another tab may have changed. */
-export function useAdultShown(): boolean {
+export function useAdultMode(): boolean {
   // Starts false and is corrected after mount: this app is a static export, so the first render happens at
   // build time where there is no document to read a cookie from, and guessing would mean a hydration
   // mismatch on every load for anyone who had revealed.
   const [on, setOn] = useState(false);
   useEffect(() => {
-    const sync = () => setOn(adultShown());
+    const sync = () => setOn(adultMode());
     sync();
     const off = onAdultChange(sync);
     // Another tab can flip it, and returning to a backgrounded tab is when a stale one would be noticed.
@@ -34,6 +35,9 @@ export function useAdultShown(): boolean {
   }, []);
   return on;
 }
+
+/** Backwards-compatible name for screens that only need to know whether the adult context is active. */
+export const useAdultShown = useAdultMode;
 
 /**
  * Reveal libraries rated 18+, for this browser session.
@@ -49,6 +53,7 @@ export function useAdultShown(): boolean {
  */
 export function AdultToggle({ className = '' }: { className?: string }) {
   const qc = useQueryClient();
+  const router = useRouter();
   const { data: libs } = useLibraries();
   const on = useAdultShown();
 
@@ -59,12 +64,15 @@ export function AdultToggle({ className = '' }: { className?: string }) {
       type="button"
       aria-pressed={on}
       onClick={() => {
-        setAdultShown(!on);
-        qc.invalidateQueries();
+        setAdultMode(!on);
+        // Normal and adult screens share query keys. Remove old snapshots before navigating so a normal
+        // rail cannot briefly render adult-scoped image URLs (or vice versa).
+        qc.clear();
+        router.push(on ? '/' : '/adult/');
       }}
       className={`chip whitespace-nowrap ${on ? 'chip-active' : ''} ${className}`}
     >
-      {tr('Show 18+')}
+      {on ? tr('Exit 18+ mode') : tr('Enter 18+ mode')}
     </button>
   );
 }
@@ -77,5 +85,16 @@ export function AdultSourcesLink({ className = '' }: { className?: string }) {
     staleTime: 60_000,
   });
   if (!(sources?.content?.length)) return null;
-  return <Link href="/adult/" className={`chip whitespace-nowrap border-rose-400/40 text-rose-300 hover:bg-rose-400/10 ${className}`}>18+ {tr('Sources')}</Link>;
+  return <Link href="/adult/sources/" className={`chip whitespace-nowrap border-rose-400/40 text-rose-300 hover:bg-rose-400/10 ${className}`}>18+ {tr('Sources')}</Link>;
+}
+
+export function AdultExit({ className = '' }: { className?: string }) {
+  const router = useRouter();
+  const qc = useQueryClient();
+  const on = useAdultMode();
+  if (!on) return null;
+  return <button type="button" onClick={() => { setAdultMode(false); qc.clear(); router.push('/'); }}
+    className={`chip whitespace-nowrap border-rose-400/40 text-rose-200 hover:bg-rose-400/10 ${className}`}>
+    {tr('Exit 18+ mode')}
+  </button>;
 }

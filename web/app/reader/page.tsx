@@ -15,22 +15,26 @@ import { ReaderPrefs, loadPrefs, savePrefs, loadSeriesPrefs, saveSeriesPrefs, sy
 import { ReaderSettings } from '@/components/ReaderSettings';
 import { Rail, SectionTitle } from '@/components/ui';
 import { SeriesCard } from '@/components/cards';
-import { IcChevronLeft, IcChevronRight, IcSliders } from '@/components/icons';
+import { IcChevronLeft, IcChevronRight, IcPause, IcPlay, IcSliders } from '@/components/icons';
 import { t as tr } from '@/lib/i18n';
+import { useAdultMode } from '@/components/AdultToggle';
 
 interface PageDim { number: number; width: number | null; height: number | null }
-interface Chapter { id: string; seriesId: string; seriesTitle: string; title: string; pages: PageDim[]; offline: boolean }
+interface Chapter { id: string; seriesId: string; seriesTitle: string; title: string; pages: PageDim[]; offline: boolean; preview?: boolean }
 interface ChapterRef { id: string; label: string }
 interface FlatItem { ci: number; number: number; width: number | null; height: number | null; key: string; firstOfChapter: boolean }
 
 const WINDOW_BEHIND = 2;
 const WINDOW_AHEAD = 6;
 const DIVIDER_H = 60;
+// Both preview tokens and library remote placeholders are read-only remote chapters.
+// Keeping remote_<series>_<chapter> out of progress/favorites/up-next avoids treating a placeholder as Komga.
+const isPreviewBook = (id: string) => id.startsWith('preview_') || id.startsWith('remote_src_') || id.startsWith('remote_');
 
 async function loadChapter(bookId: string): Promise<Chapter | null> {
   const off = await getOfflineChapter(bookId);
   if (off) {
-    return { id: bookId, seriesId: off.seriesId, seriesTitle: off.seriesTitle, title: off.title, pages: off.pages, offline: true };
+    return { id: bookId, seriesId: off.seriesId, seriesTitle: off.seriesTitle, title: off.title, pages: off.pages, offline: true, preview: isPreviewBook(bookId) };
   }
   try {
     const b = await api<Book>(`/api/books/${bookId}`);
@@ -42,6 +46,7 @@ async function loadChapter(bookId: string): Promise<Chapter | null> {
       title: b.metadata?.title || b.name,
       pages: pInfo.map((p) => ({ number: p.number, width: p.width ?? null, height: p.height ?? null })),
       offline: false,
+      preview: isPreviewBook(bookId),
     };
   } catch {
     return null;
@@ -51,6 +56,7 @@ async function loadChapter(bookId: string): Promise<Chapter | null> {
 function ReaderInner() {
   const bookId = useSearchParams().get('book') || '';
   const router = useRouter();
+  const adult = useAdultMode();
 
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [chapterRefs, setChapterRefs] = useState<ChapterRef[]>([]);
@@ -76,6 +82,7 @@ function ReaderInner() {
   const [chrome, setChrome] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [current, setCurrent] = useState(0);
+  const [playing, setPlaying] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [colW, setColW] = useState(0);
@@ -114,6 +121,7 @@ function ReaderInner() {
     setReady(false);
     setProgressReady(false);
     setEnded(false);
+    setPlaying(false);
     setCurrent(0);
     setStartPage(1);
     setChapters([]);
@@ -134,11 +142,14 @@ function ReaderInner() {
       if (outcome !== 'ok' || !first) { setFailed(outcome === 'ok' ? 'unavailable' : outcome); setReady(true); return; }
       // Read the new chapter's progress before mounting its pages. Keeping the previous chapter mounted
       // while this request was in flight let its scroll position/current page leak into the new chapter.
+      const preview = isPreviewBook(bookId);
       let resumePage = 1;
-      try {
-        const b = await api<Book>(`/api/books/${bookId}`);
-        if (b.readProgress && !b.readProgress.completed) resumePage = b.readProgress.page;
-      } catch { /* a missing progress record means start at page one */ }
+      if (!preview) {
+        try {
+          const b = await api<Book>(`/api/books/${bookId}`);
+          if (b.readProgress && !b.readProgress.completed) resumePage = b.readProgress.page;
+        } catch { /* a missing progress record means start at page one */ }
+      }
       if (!alive) return;
       setStartPage(resumePage);
       setProgressReady(true);
@@ -146,16 +157,21 @@ function ReaderInner() {
       if (first.offline && first.pages[0] && first.pages[0].width && first.pages[0].height) {
         // offline reading-direction hint not available here; keep current pref
       }
-      // chapter list for prev/next/jump
-      try {
-        const list = await api<Page<Book>>(`/api/series/${first.seriesId}/books?size=1000&sort=metadata.numberSort,asc`);
-        if (alive) setChapterRefs(list.content.map((b) => ({ id: b.id, label: chapterLabel(b) })));
-      } catch {}
-      // reading direction (drives double-spread pair order for RTL manga)
-      try {
-        const s = await api<Series>(`/api/series/${first.seriesId}`);
-        if (alive) setRtl(s?.metadata?.readingDirection === 'RIGHT_TO_LEFT');
-      } catch {}
+      if (preview) {
+        // A preview is intentionally one chapter and has no library series behind its opaque id.
+        if (alive) setChapterRefs([{ id: first.id, label: first.title }]);
+      } else {
+        // chapter list for prev/next/jump
+        try {
+          const list = await api<Page<Book>>(`/api/series/${first.seriesId}/books?size=1000&sort=metadata.numberSort,asc`);
+          if (alive) setChapterRefs(list.content.map((b) => ({ id: b.id, label: chapterLabel(b) })));
+        } catch {}
+        // reading direction (drives double-spread pair order for RTL manga)
+        try {
+          const s = await api<Series>(`/api/series/${first.seriesId}`);
+          if (alive) setRtl(s?.metadata?.readingDirection === 'RIGHT_TO_LEFT');
+        } catch {}
+      }
       setReady(true);
     })();
     return () => {
@@ -337,7 +353,7 @@ function ReaderInner() {
     api(`/api/books/${chId}/progress`, { method: 'PUT', json: payload }).catch(() => queueProgress({ bookId: chId, ...payload }));
   }, []);
   useEffect(() => {
-    if (!ready || !flat.length) return;
+    if (!ready || !flat.length || isPreviewBook(bookId)) return;
     const it = flat[current];
     if (!it) return;
     const ch = chapters[it.ci];
@@ -368,7 +384,7 @@ function ReaderInner() {
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, ready, flat.length]);
+  }, [bookId, current, ready, flat.length]);
 
   // ---- auto-scroll ----
   useEffect(() => {
@@ -395,7 +411,7 @@ function ReaderInner() {
   const { data: upNext } = useQuery({
     queryKey: ['reader-upnext', seriesId],
     queryFn: () => api<{ content: Series[] }>(`/api/series/${seriesId}/similar`),
-    enabled: !!seriesId && ended,
+    enabled: !!seriesId && ended && !isPreviewBook(bookId),
     staleTime: 5 * 60 * 1000,
   });
   const activeChapter = chapters[flat[current]?.ci ?? 0];
@@ -410,7 +426,7 @@ function ReaderInner() {
   const activeSeriesId = activeChapter?.seriesId || seriesId;
   // Preview chapters deliberately have no library series to navigate back to. The opaque preview id is
   // only a temporary reader handle; treating it as a real series would send the header to a dead page.
-  const seriesHref = activeSeriesId && !activeSeriesId.startsWith('preview_') ? `/series/?id=${activeSeriesId}` : null;
+  const seriesHref = activeSeriesId && !activeSeriesId.startsWith('preview_') && !activeSeriesId.startsWith('remote_') ? `/series/?id=${activeSeriesId}` : null;
 
   const back = () => (typeof window !== 'undefined' && window.history.length > 1 ? router.back() : router.push(seriesId ? `/series/?id=${seriesId}` : '/'));
   const goChapter = useCallback((cid?: string) => { if (cid) router.replace(`/reader/?book=${cid}`); }, [router]);
@@ -418,7 +434,7 @@ function ReaderInner() {
     const el = scrollRef.current;
     if (!el) return;
     // Webtoon has no discrete pages: page movement is one viewport of scroll.
-    if (prefs.mode === 'vertical') { el.scrollBy({ top: direction * el.clientHeight * 0.88, behavior: 'smooth' }); return; }
+    if (prefs.mode === 'vertical') { el.scrollBy({ top: direction * el.clientHeight, behavior: 'smooth' }); return; }
     const currentSlide = slideOf[current] ?? 0;
     const targetSlide = currentSlide + direction;
     // A chapter is deliberately kept as a single page sequence. Crossing its edge is a
@@ -426,6 +442,19 @@ function ReaderInner() {
     if (targetSlide < 0 || targetSlide >= slides.length) return;
     el.scrollTo({ left: targetSlide * el.clientWidth, behavior: 'smooth' });
   }, [current, goChapter, nextId, prefs.mode, prevId, slideOf, slides.length]);
+
+  // Play mode advances one viewport/page at the configured interval. It deliberately stops at the
+  // end of the loaded chapter instead of silently changing chapters, so reading progress remains explicit.
+  useEffect(() => {
+    if (!playing || !ready || failed || !flat.length || ended) return;
+    if (current >= flat.length - 1) { setPlaying(false); return; }
+    const timer = window.setTimeout(() => movePage(1), Math.max(1, Math.min(60, prefs.playSeconds || 5)) * 1000);
+    return () => window.clearTimeout(timer);
+  }, [current, ended, failed, flat.length, movePage, playing, prefs.playSeconds, ready]);
+
+  useEffect(() => {
+    if (ended) setPlaying(false);
+  }, [ended]);
   const toggleFullscreen = () => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else document.documentElement.requestFullscreen?.().catch(() => {});
@@ -433,11 +462,11 @@ function ReaderInner() {
 
   // ---- ambient cover-art theming ----
   useEffect(() => {
-    if (!seriesId) return;
+    if (!seriesId || isPreviewBook(bookId)) return;
     let alive = true;
     api<{ color: string | null }>(`/api/series/${seriesId}/color`).then((r) => { if (alive) applyCover(r.color); }).catch(() => {});
     return () => { alive = false; clearCover(); };
-  }, [seriesId]);
+  }, [bookId, seriesId]);
 
   // ---- adopt this account's reader settings (they follow the user, not the browser) ----
   const pulledPrefs = useRef(false);
@@ -450,7 +479,7 @@ function ReaderInner() {
 
   // ---- per-series memory (mode/theme/zoom) ----
   useEffect(() => {
-    if (!seriesId) return;
+    if (!seriesId || isPreviewBook(bookId)) return;
     const sp = loadSeriesPrefs(seriesId);
     if (sp.mode || sp.theme || sp.spread !== undefined)
       setPrefs((cur) => ({ ...cur, ...(sp.mode ? { mode: sp.mode } : {}), ...(sp.theme ? { theme: sp.theme } : {}), ...(sp.spread !== undefined ? { spread: sp.spread } : {}) }));
@@ -552,11 +581,11 @@ function ReaderInner() {
   const markKey = (bookId: string, page: number) => `${bookId}:${page}`;
   const bookmarked = activeChapter ? marks.has(markKey(activeChapter.id, pageInChapter)) : false;
   useEffect(() => {
-    if (!seriesId) return;
+    if (!seriesId || isPreviewBook(bookId)) return;
     api<{ content: Array<{ book_id: string; page: number }> }>(`/api/bookmarks?seriesId=${encodeURIComponent(seriesId)}`)
       .then((r) => setMarks(new Set(r.content.map((b) => markKey(b.book_id, b.page)))))
       .catch(() => {});
-  }, [seriesId]);
+  }, [bookId, seriesId]);
 
   const toggleBookmark = async () => {
     if (!activeChapter || !pageInChapter) return;
@@ -741,6 +770,7 @@ function ReaderInner() {
               ) : (
                 <div className="min-w-0 flex-1">{titleBlock}</div>
               )}
+              {adult && <span className="shrink-0 rounded-full border border-rose-400/40 bg-rose-400/10 px-2 py-1 text-[10px] font-bold tracking-wide text-rose-200">18+</span>}
               {/* desktop chapter jump */}
               {chapterRefs.length > 0 && (
                 <select value={activeChapter?.id || ''} onChange={(e) => goChapter(e.target.value)}
@@ -748,14 +778,14 @@ function ReaderInner() {
                   {chapterRefs.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                 </select>
               )}
-              <button onClick={toggleBookmark} aria-label={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
+              {!isPreviewBook(bookId) && <button onClick={toggleBookmark} aria-label={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
                 aria-pressed={bookmarked}
                 className={`grid h-10 w-10 shrink-0 place-items-center rounded-full bg-black/45 backdrop-blur ${bookmarked ? 'text-accent' : 'text-white'}`}>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill={bookmarked ? 'currentColor' : 'none'}
                      stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
                   <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z" />
                 </svg>
-              </button>
+              </button>}
               <button onClick={() => setShowSettings(true)} className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur">
                 <IcSliders width={20} height={20} />
               </button>
@@ -786,6 +816,12 @@ function ReaderInner() {
                   aria-label={tr('Previous page')}
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur disabled:opacity-30">
                   <IcChevronLeft width={18} height={18} />
+                </button>
+                <button onClick={() => setPlaying((value) => !value)} disabled={!ready || !!failed || !flat.length || ended}
+                  aria-label={playing ? 'Pause play mode' : 'Start play mode'} aria-pressed={playing}
+                  title={`${playing ? 'Pause' : 'Play'} · ${prefs.playSeconds}s`}
+                  className={`grid h-9 w-9 shrink-0 place-items-center rounded-full backdrop-blur disabled:opacity-30 ${playing ? 'bg-accent text-ink-950' : 'bg-black/45 text-white'}`}>
+                  {playing ? <IcPause width={16} height={16} /> : <IcPlay width={16} height={16} />}
                 </button>
                 <span className="shrink-0 text-[11px] tabular-nums text-fog-300">{chapterPageCount ? `${pageInChapter}/${chapterPageCount}` : `${current + 1}/${total}`}</span>
                 <input type="range" min={0} max={Math.max(0, total - 1)} value={current}

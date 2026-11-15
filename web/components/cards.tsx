@@ -113,18 +113,31 @@ export function ContinueCard({ book, eager = false }: { book: Book; eager?: bool
 }
 
 /** Grid tile (library / search). */
-export function SeriesTile({ series, eager = false, selectable, selected, onToggle }: {
+export function SeriesTile({ series, eager = false, selectable, selected, onToggle, onLongPress }: {
   series: Series; eager?: boolean;
   /** select mode: the tile stops navigating and toggles instead */
   selectable?: boolean; selected?: boolean; onToggle?: () => void;
+  /** Enters bulk selection on touch-and-hold or desktop context menu. */
+  onLongPress?: () => void;
 }) {
   const unread = series.booksUnreadCount ?? 0;
+  const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const held = useRef(false);
+  const clearHold = () => { if (hold.current) { clearTimeout(hold.current); hold.current = null; } };
+  const startHold = () => {
+    if (selectable || !onLongPress) return;
+    held.current = false;
+    clearHold();
+    hold.current = setTimeout(() => { held.current = true; onLongPress(); }, 550);
+  };
+  const finishHold = (e?: React.SyntheticEvent) => { clearHold(); if (held.current) { e?.preventDefault(); e?.stopPropagation(); held.current = false; } };
   const Wrap: any = selectable ? 'button' : Link;
   const wrapProps = selectable
     ? { type: 'button', onClick: onToggle, className: 'group w-full text-left' }
     : { href: `/series/?id=${series.id}`, className: 'group' };
   return (
-    <Wrap {...wrapProps}>
+    <Wrap {...wrapProps} onPointerDown={startHold} onPointerUp={finishHold} onPointerCancel={clearHold}
+      onContextMenu={(e: React.MouseEvent) => { if (!selectable && onLongPress) { e.preventDefault(); onLongPress(); } }}>
       <div className="grad-border relative aspect-[2/3] overflow-hidden rounded-2xl border border-ink-700/60 transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-glow group-active:scale-[0.97]">
         <Img src={img.seriesThumb(series.id)} alt={series.metadata?.title || series.name} eager={eager} className="h-full w-full transition-transform duration-500 group-hover:scale-[1.07]" />
         {selectable && (
@@ -176,6 +189,8 @@ export interface SourceItem {
   inLibrary?: boolean;
   /** >1 when the same title was found on several sources. */
   providerCount?: number;
+  genres?: string[];
+  author?: string;
 }
 
 /**
@@ -188,11 +203,12 @@ export interface SourceItem {
  * Chrome is `SeriesTile`'s, deliberately, so the things you own and the things you could own read as one
  * system rather than as two grids that happen to be adjacent.
  */
-export function SourceCard({ item, sourceName, onAdd, eager }: {
+export function SourceCard({ item, sourceName, onAdd, onAuthor, eager }: {
   item: SourceItem;
   /** shown as a corner chip, because a wall merged from several sources otherwise hides where a title came from */
   sourceName?: string;
   onAdd: () => void;
+  onAuthor?: (author: string) => void;
   eager?: boolean;
 }) {
   const owned = !!item.inLibrary;
@@ -237,6 +253,13 @@ export function SourceCard({ item, sourceName, onAdd, eager }: {
       <p className="mt-1.5 line-clamp-2 text-xs font-medium leading-tight text-fog-300 transition group-hover:text-fog-100">
         {item.title}
       </p>
+      {item.author && onAuthor && (
+        <span role="link" tabIndex={0} onClick={(e) => { e.stopPropagation(); onAuthor(item.author!); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onAuthor(item.author!); } }}
+          className="mt-0.5 block truncate text-[11px] text-fog-500 hover:text-accent focus:text-accent focus:outline-none">
+          {item.author}
+        </span>
+      )}
     </button>
   );
 }

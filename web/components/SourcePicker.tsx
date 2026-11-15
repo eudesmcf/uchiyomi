@@ -93,10 +93,10 @@ export function SourcePicker({ sources, states, settled, total, selected, onSele
       <div className="flex flex-wrap items-center gap-2">
         {/* Which listing, before which sources -- it changes what the chips beside it can even offer. */}
         <div className="flex items-center gap-1.5 pe-1">
-          {(['newest', 'popular'] as const).map((m) => (
+          {(['newest', 'popular', 'all'] as const).map((m) => (
             <button key={m} type="button" onClick={() => onMode(m)} aria-pressed={mode === m}
               className={`chip text-xs ${mode === m ? 'chip-active' : ''}`}>
-              {m === 'newest' ? tr('Newest') : tr('Popular')}
+              {m === 'newest' ? tr('Newest') : m === 'popular' ? tr('Popular') : tr('All listings')}
             </button>
           ))}
           <span aria-hidden className="mx-0.5 h-4 w-px bg-ink-700" />
@@ -185,7 +185,7 @@ export function SourceLatest({ source, listMode, language, page, enabled, adultS
     // wall worse for the next half hour.
     queryFn: ({ signal }) =>
       api<{ content: any[] }>(
-        `/api/sources/${listMode === 'popular' ? 'popular' : 'latest'}?source=${encodeURIComponent(source.id)}&page=${page}${language ? `&lang=${encodeURIComponent(language)}` : ''}${adultSources ? '&adultSources=1' : ''}`,
+        `/api/sources/${listMode === 'popular' ? 'popular' : listMode === 'all' ? 'all' : 'latest'}?source=${encodeURIComponent(source.id)}&page=${page}${language ? `&lang=${encodeURIComponent(language)}` : ''}${adultSources ? '&adultSources=1' : ''}`,
         { signal },
       ),
     enabled,

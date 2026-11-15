@@ -17,6 +17,7 @@
   --start: 0%;
 
 }
+.adult-mode { --accent: 190 62 93; }
 [dir='rtl'] { --start: 100%; }
 @media (min-width: 640px)  { :root { --gutter: 1.25rem; } }
 @media (min-width: 1024px) { :root { --gutter: 2rem; } }

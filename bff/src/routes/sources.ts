@@ -9,7 +9,8 @@ import { noteChapterFailure } from '../lib/chapterFailures';
 import { scanOrder } from '../lib/scanOrder';
 import { budgetFor } from '../lib/sources/budget';
 import { SOLVER_CONCURRENCY } from '../lib/sources/flaresolverr';
-import { previewBookId } from '../lib/remoteId';
+import { signedPreviewBookId } from '../lib/previewToken';
+import { rememberPreview } from '../lib/remoteChapter';
 
 /**
  * How many searches a fill scan runs at once, and when it stops starting new ones.
@@ -48,7 +49,7 @@ import { env } from '../env';
 //
 // Which SOURCES you may reach is the opposite: entirely about who is asking, which is what `viewCtxFor` and
 // `sourceAllowedFor` answer.
-import { visibleToAll, viewCtxFor, sourceAllowedFor, browsable, Params, type ViewCtx, hideAdult } from '../lib/visibility';
+import { visibleToAll, viewCtxFor, sourceAllowedFor, browsable, Params, type ViewCtx, hideAdult, adultOnly } from '../lib/visibility';
 
 interface Job {
   title: string; total: number; done: number;
@@ -166,6 +167,34 @@ const LATEST_TIMEOUT = env.SOURCE_LATEST_TIMEOUT_MS;
 const LATEST_TTL = 10 * 60_000;
 /** What the two lookups an add must do inline are allowed to take. Matches the /find handler's budget. */
 const ADD_LOOKUP_TIMEOUT = 20_000;
+
+type HitomiTag = { value: string; count: number };
+let hitomiTagsCache: { at: number; tags: HitomiTag[] } | null = null;
+const HITOMI_TAGS_TTL = 6 * 60 * 60_000;
+
+async function fetchHitomiTags(): Promise<HitomiTag[]> {
+  if (hitomiTagsCache && Date.now() - hitomiTagsCache.at < HITOMI_TAGS_TTL) return hitomiTagsCache.tags;
+  const letters = ['123', ...'abcdefghijklmnopqrstuvwxyz'];
+  const pages = await Promise.all(letters.map(async (letter) => {
+    const response = await fetch(`https://hitomi.la/alltags-${letter}.html`, { signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) throw new Error(`Hitomi tags returned ${response.status}`);
+    return response.text();
+  }));
+  const found = new Map<string, number>();
+  for (const html of pages) {
+    // The official page renders each tag as an anchor followed by its gallery count.
+    const re = /<a[^>]+href="\/tag\/([^"]+)\.html"[^>]*>([\s\S]*?)<\/a>\s*\((\d+)\)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(html))) {
+      const value = decodeURIComponent(match[1]).replace(/\+/g, ' ').trim();
+      const count = Number(match[3]) || 0;
+      if (value && !/^(?:yaoi|boys?[- ]love|shounen[- ]?ai)$/i.test(value)) found.set(value, Math.max(found.get(value) || 0, count));
+    }
+  }
+  const tags = [...found.entries()].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+  hitomiTagsCache = { at: Date.now(), tags };
+  return tags;
+}
 
 /**
  * What `/api/sources/detail` just fetched, so an add does not fetch it all over again.
@@ -294,6 +323,18 @@ async function latestPage(src: SourceAdapter, page: number, mode: ListMode = 'la
 /** Whatever is on hand for this source and page, however old. Used when a source is in cooldown. */
 const cachedLatest = (id: string, page: number, mode: ListMode = 'latest', language = ''): SourceSeries[] =>
   latestCache.get(`${id}:${mode}:${language || 'default'}:${page}`)?.items ?? [];
+
+/** Combine the source's available rankings for the Discover "All" tab without inventing a score. */
+async function allPage(src: SourceAdapter, page: number, language = ''): Promise<SourceSeries[]> {
+  const [latest, popular] = await Promise.all([
+    typeof src.latest === 'function' ? latestPage(src, page, 'latest', language) : Promise.resolve([] as SourceSeries[]),
+    typeof src.popular === 'function' ? latestPage(src, page, 'popular', language) : Promise.resolve([] as SourceSeries[]),
+  ]);
+  const seen = new Set<string>();
+  return [...latest, ...popular]
+    .filter((item) => !!item.sourceId && !seen.has(item.sourceId) && (seen.add(item.sourceId), true))
+    .slice(0, 24);
+}
 
 /** Exposed for tests: the cache is process-global and would otherwise leak between cases. */
 export function clearLatestCache(): void {
@@ -587,7 +628,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
     }
     // Resolved once per request, as in catalog.ts. Only `maxAgeRating` is read here, but taking the whole
     // context means this file cannot drift from everyone else's idea of who the viewer is.
-    (req as any).viewCtx = await viewCtxFor(userIdOf(req), roleOf(req), { hideAdult: hideAdult(req) });
+    (req as any).viewCtx = await viewCtxFor(userIdOf(req), roleOf(req), { hideAdult: hideAdult(req), adultOnly: adultOnly(req) });
   });
 
   const vc = (req: FastifyRequest): ViewCtx => (req as any).viewCtx as ViewCtx;
@@ -598,7 +639,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
   const reachable = (req: FastifyRequest): SourceAdapter[] =>
     listSources().filter((s) => sourceAllowedFor(s, vc(req).maxAgeRating));
   const adultSourceZone = (req: FastifyRequest): boolean =>
-    (req.query as { adultSources?: string } | undefined)?.adultSources === '1';
+    adultOnly(req) || (req.query as { adultSources?: string } | undefined)?.adultSources === '1';
   const reachableForZone = (req: FastifyRequest): SourceAdapter[] =>
     reachable(req).filter((s) => (!!s.isNsfw) === adultSourceZone(req));
 
@@ -684,7 +725,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
     const { source, q: query, adultSources } = req.query as { source?: string; q?: string; adultSources?: string };
     const src = source ? getSource(source) : null;
     if (!src || !query?.trim()) return { content: [] };
-    if ((!!src.isNsfw) !== (adultSources === '1')) return denySource(reply);
+    if ((!!src.isNsfw) !== adultSourceZone(req)) return denySource(reply);
     if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
     const raw = await src.search(query.trim()).catch(() => []);
     // dedupe by sourceId (duplicate ids collide on the React key → wrong cover/title on a card)
@@ -942,17 +983,18 @@ export default async function sourceRoutes(app: FastifyInstance) {
       catch { return []; }
     }));
     // group by normalized title → one card that carries every provider offering it (preferred order preserved)
-    const groups = new Map<string, { title: string; coverUrl?: string; updatedAt?: string; providers: { source: string; name: string; sourceId: string; coverUrl?: string; title: string }[] }>();
+    const groups = new Map<string, { title: string; coverUrl?: string; updatedAt?: string; author?: string; providers: { source: string; name: string; sourceId: string; coverUrl?: string; title: string; author?: string }[] }>();
     for (const list of per) for (const r of list) {
       if (!r.sourceId || !r.title) continue;
       const key = norm(r.title);
       if (!key) continue;
       let g = groups.get(key);
-      if (!g) { g = { title: r.title, coverUrl: r.coverUrl, updatedAt: r.updatedAt, providers: [] }; groups.set(key, g); }
+      if (!g) { g = { title: r.title, coverUrl: r.coverUrl, updatedAt: r.updatedAt, author: r.author, providers: [] }; groups.set(key, g); }
       if (!g.coverUrl && r.coverUrl) g.coverUrl = r.coverUrl;
       if (!g.updatedAt && r.updatedAt) g.updatedAt = r.updatedAt;
+      if (!g.author && r.author) g.author = r.author;
       if (!g.providers.some((p) => p.source === r.source)) {
-        g.providers.push({ source: r.source, name: r.name, sourceId: r.sourceId, coverUrl: r.coverUrl, title: r.title });
+        g.providers.push({ source: r.source, name: r.name, sourceId: r.sourceId, coverUrl: r.coverUrl, title: r.title, author: r.author });
       }
     }
     const have = await inLibrary([...groups.values()].map((g) => g.title));
@@ -964,11 +1006,20 @@ export default async function sourceRoutes(app: FastifyInstance) {
   });
 
   // Browse a source's newest / recently-updated series (no query). Same card shape as search.
+  app.get('/api/sources/tags', async (req, reply) => {
+    const { source } = req.query as { source?: string };
+    const src = source ? getSource(source) : null;
+    if (!src || !/hitomi/i.test(src.name)) return { content: [] };
+    if ((!!src.isNsfw) !== adultSourceZone(req) || !sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
+    try { return { content: await fetchHitomiTags() }; }
+    catch (error) { req.log.warn({ err: error }, 'Hitomi tag index unavailable'); return reply.code(503).send({ error: 'Hitomi tag index unavailable' }); }
+  });
+
   app.get('/api/sources/latest', async (req, reply) => {
     const { source, page, lang, adultSources } = req.query as { source?: string; page?: string; lang?: string; adultSources?: string };
     const src = source ? getSource(source) : null;
     if (!src || typeof src.latest !== 'function') return { content: [] };
-    if ((!!src.isNsfw) !== (adultSources === '1')) return denySource(reply);
+    if ((!!src.isNsfw) !== adultSourceZone(req)) return denySource(reply);
     // Refused by id, not merely hidden in the list. The web app is a static export, so a UI-only filter
     // would leave this returning twenty-four adult covers as JSON to a capped account holding the id.
     if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
@@ -1001,7 +1052,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
     const { source, page, lang, adultSources } = req.query as { source?: string; page?: string; lang?: string; adultSources?: string };
     const src = source ? getSource(source) : null;
     if (!src || typeof src.popular !== 'function') return { content: [] };
-    if ((!!src.isNsfw) !== (adultSources === '1')) return denySource(reply);
+    if ((!!src.isNsfw) !== adultSourceZone(req)) return denySource(reply);
     if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
     if (await isDisabled(source!).catch(() => false)) return { content: [] };
     const p = Math.max(1, parseInt(page || '1', 10) || 1);
@@ -1015,10 +1066,32 @@ export default async function sourceRoutes(app: FastifyInstance) {
     return { content: results.map((r) => ({ ...r, inLibrary: have.has(norm(r.title)) })) };
   });
 
+  // Browse the union of the source's newest and popular listings. This keeps "All" useful for adapters that
+  // expose only one ranking, while still avoiding duplicate cards when both rankings contain the same title.
+  app.get('/api/sources/all', async (req, reply) => {
+    const { source, page, lang } = req.query as { source?: string; page?: string; lang?: string };
+    const src = source ? getSource(source) : null;
+    if (!src || (typeof src.latest !== 'function' && typeof src.popular !== 'function')) return { content: [] };
+    if ((!!src.isNsfw) !== adultSourceZone(req)) return denySource(reply);
+    if (!sourceAllowedFor(src, vc(req).maxAgeRating)) return denySource(reply);
+    if (await isDisabled(source!).catch(() => false)) return { content: [] };
+    const p = Math.max(1, parseInt(page || '1', 10) || 1);
+    if (await blockedNow(source!).catch(() => null)) {
+      const stale = [...cachedLatest(src.id, p, 'latest', lang), ...cachedLatest(src.id, p, 'popular', lang)];
+      const seen = new Set<string>();
+      const unique = stale.filter((r) => !seen.has(r.sourceId) && (seen.add(r.sourceId), true)).slice(0, 24);
+      const have = await inLibrary(unique.map((r) => r.title));
+      return { content: unique.map((r) => ({ ...r, inLibrary: have.has(norm(r.title)) })) };
+    }
+    const results = await allPage(src, p, lang);
+    const have = await inLibrary(results.map((r) => r.title));
+    return { content: results.map((r) => ({ ...r, inLibrary: have.has(norm(r.title)) })) };
+  });
+
   app.get('/api/sources/jobs', async (req) => {
     sweepJobs();
     const all = [...jobs.entries()].map(([folder, j]) => ({ folder, ...j })).sort((left, right) => left.position - right.position);
-    if (!vc(req).hideAdultLibraries) return { content: all };
+    if (!vc(req).hideAdultLibraries && !vc(req).adultOnly) return { content: all };
     // A download job carries the series title, so the strip on Discover is a listing like any other. Jobs
     // are keyed by folder, which is exactly what lib_series.folder holds, so the filter is one lookup. A
     // job for a series not yet scanned in has no row and stays visible: it cannot be in a library yet.
@@ -1163,7 +1236,17 @@ export default async function sourceRoutes(app: FastifyInstance) {
     const { series, chapters } = await seriesAndChapters(src, sourceId, lang);
     const chapter = chapterId ? chapters.find((c) => String(c.sourceId) === chapterId) : chapters[0];
     if (!series || !chapter) return reply.code(404).send({ error: 'chapter_not_available' });
-    return { bookId: previewBookId(source!, sourceId, String(chapter.sourceId)) };
+    const bookId = signedPreviewBookId(source!, sourceId, String(chapter.sourceId), {
+      seriesTitle: series.title,
+      sourceUrl: series.url || src.base || null,
+      number: chapter.number,
+      title: chapter.title || `Chapter ${chapter.number}`,
+      pages: chapter.pages ?? null,
+    });
+    // Keep the short-lived cache for old preview_ links, but new remote_src_ ids are self-contained and
+    // survive a restart or a rolling deployment.
+    rememberPreview(bookId, source!, series, chapter);
+    return { bookId };
   });
 
   app.post('/api/sources/add', async (req, reply) => {

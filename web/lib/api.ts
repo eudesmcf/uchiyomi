@@ -1,7 +1,7 @@
 // Same-origin API client. Access token lives in memory; the httpOnly refresh
 // cookie silently re-mints it (and the image cookie) on 401 or app launch.
 
-import { withAdult } from './adult';
+import { adultMode, withAdult } from './adult';
 
 let accessToken: string | null = null;
 let refreshing: Promise<boolean> | null = null;
@@ -91,14 +91,16 @@ export async function api<T = any>(path: string, opts: Opts = {}): Promise<T> {
 
 // ---- image URLs (authorized by the httpOnly yomi_img cookie) ----
 export const img = {
+  // Browser image tags do not use api(), so carry the same context explicitly to the image authorization hook.
+  view: (path: string) => adultMode() ? `${path}${path.includes('?') ? '&' : '?'}view=adult` : path,
   // ?v bump = one-time cache-bust so clients pinned to the old immutable panel thumbnails refetch the real covers
   // w: hi-res poster variant (800|1600) for the detail poster / hero; cards use the 400px default
   // A falsy id means the caller rendered a tile before its data arrived. Returning '' makes <img> skip the
   // request entirely; Img shows its placeholder. Requesting /img/series/undefined/thumb only ever produced a
   // server error and a broken tile.
   seriesThumb: (id: string, av?: number, w?: number) =>
-    id ? `/img/series/${encodeURIComponent(id)}/thumb?v=2${av ? `&av=${av}` : ''}${w ? `&w=${w}` : ''}` : '',
-  bookThumb: (id: string) => (id ? `/img/books/${encodeURIComponent(id)}/thumb` : ''),
+    id ? img.view(`/img/series/${encodeURIComponent(id)}/thumb?v=2${av ? `&av=${av}` : ''}${w ? `&w=${w}` : ''}`) : '',
+  bookThumb: (id: string) => (id ? img.view(`/img/books/${encodeURIComponent(id)}/thumb`) : ''),
   page: (bookId: string, n: number, w?: number) =>
-    `/img/books/${encodeURIComponent(bookId)}/page/${n}${w ? `?w=${w}` : ''}`,
+    img.view(`/img/books/${encodeURIComponent(bookId)}/page/${n}${w ? `?w=${w}` : ''}`),
 };

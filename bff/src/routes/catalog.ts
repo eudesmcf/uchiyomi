@@ -4,16 +4,32 @@ import { q, one } from '../lib/db';
 import { komgaImage } from '../lib/komga';
 import { content as komga, NATIVE_PROGRESS } from '../lib/backend';
 import { UnsupportedFilter } from '../lib/ownedCatalog';
-import { viewCtxFor, SYSTEM_CTX, type ViewCtx, hideAdult, browsableIds, browsable, Params } from '../lib/visibility';
+import { viewCtxFor, SYSTEM_CTX, type ViewCtx, hideAdult, adultOnly, browsableIds, browsable, Params } from '../lib/visibility';
 
 /** The viewer attached by the preHandler above. */
 const vc = (req: FastifyRequest): ViewCtx => (req as any).viewCtx as ViewCtx;
 import { dominantHex } from '../lib/color';
 import { runtime } from '../lib/runtime';
+import { isPreviewBookId, parseRemoteBookId } from '../lib/remoteId';
+import { remoteErrorCode, remoteErrorStatus, remotePageUrls, resolveRemoteChapter } from '../lib/remoteChapter';
 import { authenticate, roleOf, userIdOf } from '../lib/auth';
 import { warmHeroBackdrops } from './images';
 import { writeProgress, reachedEnd } from '../lib/progress';
 import { refreshSourceMetadataAll } from '../lib/updater';
+
+function previewBook(row: Awaited<ReturnType<typeof resolveRemoteChapter>>, id: string) {
+  if (!row) return null;
+  const title = row.title || `Chapter ${row.number}`;
+  return {
+    id,
+    seriesId: row.series_id,
+    seriesTitle: row.series_title,
+    name: title,
+    metadata: { title, number: row.number, numberSort: row.number },
+    media: { pagesCount: row.pages ?? 0 },
+    readProgress: null,
+  };
+}
 
 async function seriesColors(ids: string[]): Promise<Map<string, string>> {
   if (!ids.length) return new Map();
@@ -153,7 +169,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
   // Resolve the viewer once per request. Everything below reads it rather than deriving its own, so there
   // is one decision about what this person may see instead of a predicate each handler has to remember.
   app.addHook('preHandler', async (req) => {
-    (req as any).viewCtx = await viewCtxFor(userIdOf(req), roleOf(req), { hideAdult: hideAdult(req) });
+    (req as any).viewCtx = await viewCtxFor(userIdOf(req), roleOf(req), { hideAdult: hideAdult(req), adultOnly: adultOnly(req) });
   });
 
   app.get('/api/libraries', async (req) => komga.libraries(vc(req)));
@@ -509,14 +525,33 @@ export default async function catalogRoutes(app: FastifyInstance) {
     return { ...res, content: await booksForUser(req, res.content) };
   });
 
-  app.get('/api/books/:id', async (req) => {
+  app.get('/api/books/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (isPreviewBookId(id) || parseRemoteBookId(id)) {
+      try {
+        const book = previewBook(await resolveRemoteChapter(vc(req), id), id);
+        if (book) return book;
+        return reply.code(404).send({ error: 'preview_not_found' });
+      } catch (error) {
+        return reply.code(remoteErrorStatus(error)).send({ error: remoteErrorCode(error) });
+      }
+    }
     const b = await komga.book(vc(req), id);
     return (await booksForUser(req, [b]))[0];
   });
 
-  app.get('/api/books/:id/pages', async (req) => {
+  app.get('/api/books/:id/pages', async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (isPreviewBookId(id) || parseRemoteBookId(id)) {
+      try {
+        const preview = await resolveRemoteChapter(vc(req), id);
+        if (!preview) return reply.code(404).send({ error: 'preview_not_found' });
+        const count = preview.pages ?? (await remotePageUrls(preview)).length;
+        return Array.from({ length: count }, (_, i) => ({ number: i + 1, width: null, height: null }));
+      } catch (error) {
+        return reply.code(remoteErrorStatus(error)).send({ error: remoteErrorCode(error) });
+      }
+    }
     return komga.bookPages(vc(req), id);
   });
 
@@ -542,6 +577,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
 
   app.get('/api/books/:id/next', async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (isPreviewBookId(id)) return reply.code(404).send({ error: 'no_next' });
     try {
       return await komga.bookNext(vc(req), id);
     } catch {
@@ -553,6 +589,7 @@ export default async function catalogRoutes(app: FastifyInstance) {
   app.put('/api/books/:id/progress', async (req, reply) => {
     const uid = userIdOf(req);
     const { id } = req.params as { id: string };
+    if (isPreviewBookId(id)) return reply.code(409).send({ error: 'preview_read_only' });
     const { page, completed, seriesId, deviceId, silent, at } = progressBody.parse(req.body ?? {});
 
     let sid: string | undefined;

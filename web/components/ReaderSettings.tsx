@@ -97,6 +97,20 @@ export function ReaderSettings({
           </>
         )}
 
+        <Row label={`Play interval · ${prefs.playSeconds}s`}>
+          <input type="range" min={1} max={60} step={1} value={prefs.playSeconds}
+            onChange={(e) => set({ playSeconds: Number(e.target.value) })}
+            className="w-full accent-[rgb(var(--accent))]" />
+          <div className="mt-2 grid grid-cols-5 gap-2">
+            {[3, 5, 10, 15, 30].map((seconds) => (
+              <button key={seconds} onClick={() => set({ playSeconds: seconds })}
+                className={`rounded-xl border py-2 text-xs ${prefs.playSeconds === seconds ? 'border-accent bg-accent-soft text-accent' : 'border-ink-700 text-fog-300'}`}>
+                {seconds}s
+              </button>
+            ))}
+          </div>
+        </Row>
+
         <Row label="Fit">
           <div className="grid grid-cols-2 gap-2">
             <button onClick={() => set({ fitWidth: true })}

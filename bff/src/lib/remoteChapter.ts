@@ -1,11 +1,12 @@
 import { one } from './db';
-import { getSource } from './sources';
+import { getSource, listSources, loadSuwayomiSources } from './sources';
 import { cfSession } from './sources/flaresolverr';
-import type { SourceAdapter } from './sources/types';
+import type { SourceAdapter, SourceSeries, SourceChapter } from './sources/types';
 import type { ViewCtx } from './visibility';
 import { Params, visible, sourceAllowedFor } from './visibility';
-export { parseRemoteBookId, remoteBookId, parsePreviewBookId, previewBookId } from './remoteId';
-import { parseRemoteBookId, parsePreviewBookId } from './remoteId';
+export { parseRemoteBookId, remoteBookId, parsePreviewBookId } from './remoteId';
+import { isPreviewBookId, parseRemoteBookId, parsePreviewBookId } from './remoteId';
+import { parseSignedPreviewBookId } from './previewToken';
 
 export interface RemoteChapterRow {
   series_id: string;
@@ -22,49 +23,122 @@ export interface RemoteChapterRow {
   source_url: string | null;
 }
 
+// A preview is intentionally not persisted in the library. Keep the exact result of the preview lookup for
+// a short time so the reader uses the same chapter selected by the dialog instead of re-listing a remote source.
+const previewCache = new Map<string, { expiresAt: number; row: RemoteChapterRow }>();
+const PREVIEW_TTL = 10 * 60_000;
+
+export class RemoteChapterError extends Error {
+  constructor(readonly statusCode: 400 | 403 | 404 | 503, readonly code: string, message = code) {
+    super(message);
+  }
+}
+
+export function remoteErrorStatus(error: unknown): number {
+  const status = Number((error as any)?.statusCode);
+  return [400, 403, 404, 503].includes(status) ? status : 503;
+}
+
+export function remoteErrorCode(error: unknown): string {
+  return typeof (error as any)?.code === 'string' ? (error as any).code : 'remote_unavailable';
+}
+
+export function rememberPreview(id: string, sourceId: string, series: SourceSeries, chapter: SourceChapter): void {
+  previewCache.set(id, {
+    expiresAt: Date.now() + PREVIEW_TTL,
+    row: {
+      series_id: id,
+      series_title: series.title,
+      source_id: sourceId,
+      source_series_id: String(series.sourceId),
+      source_chapter_id: String(chapter.sourceId),
+      number: chapter.number,
+      title: chapter.title || `Chapter ${chapter.number}`,
+      pages: chapter.pages ?? null,
+      published_at: chapter.publishedAt || null,
+      status: 'preview',
+      error: null,
+      source_url: series.url || null,
+    },
+  });
+}
+
 export async function resolveRemoteChapter(ctx: ViewCtx, id: string): Promise<RemoteChapterRow | null> {
+  if (isPreviewBookId(id)) {
+    const preview = parseSignedPreviewBookId(id) || parsePreviewBookId(id);
+    if (!preview) throw new RemoteChapterError(404, 'preview_invalid');
+    if (preview.expiresAt && preview.expiresAt <= Date.now()) throw new RemoteChapterError(404, 'preview_expired');
+
+    let source = getSource(preview.sourceId) || listSources().find((candidate) => candidate.id === preview.sourceId) || null;
+    if (!source) {
+      await loadSuwayomiSources().catch(() => {});
+      source = getSource(preview.sourceId) || listSources().find((candidate) => candidate.id === preview.sourceId) || null;
+    }
+    if (!source) throw new RemoteChapterError(503, 'source_unavailable');
+    if (!sourceAllowedFor(source, ctx.maxAgeRating)) throw new RemoteChapterError(403, 'adult_access_denied');
+
+    // New tokens carry the exact chapter metadata and no longer need a process-local cache. This works after
+    // a restart, in a new tab, and behind a rolling deployment where the request may reach a new process.
+    if (preview.signed) {
+      return {
+        series_id: id,
+        series_title: preview.seriesTitle || 'Preview',
+        source_id: preview.sourceId,
+        source_series_id: preview.sourceSeriesId,
+        source_chapter_id: preview.sourceChapterId,
+        number: preview.number ?? 0,
+        title: preview.title || 'Preview chapter',
+        pages: preview.pages ?? null,
+        published_at: null,
+        status: 'preview',
+        error: null,
+        source_url: preview.sourceUrl ?? source.base ?? null,
+      };
+    }
+
+    const cached = previewCache.get(id);
+    if (cached) {
+      if (cached.expiresAt > Date.now()) return cached.row;
+      previewCache.delete(id);
+    }
+    // The preview endpoint already validated this source/series/chapter combination. Do not list the remote
+    // chapters again here: the opaque id is enough to route the selected chapter's pages.
+    const series = await source.getSeries(preview.sourceSeriesId).catch(() => null);
+    if (!series) throw new RemoteChapterError(404, 'chapter_not_available');
+    return {
+      series_id: id,
+      series_title: series.title,
+      source_id: preview.sourceId,
+      source_series_id: preview.sourceSeriesId,
+      source_chapter_id: preview.sourceChapterId,
+      number: 0,
+      title: 'Preview chapter',
+      pages: null,
+      published_at: null,
+      status: 'preview',
+      error: null,
+      source_url: series.url || source.base || null,
+    };
+  }
+
   const parsed = parseRemoteBookId(id);
-  if (!parsed) return null;
   const p = new Params();
   const visibleSeries = `(
     SELECT s.id, s.title, s.source_id, s.source_series_id, s.web
       FROM lib_series s
      WHERE ${visible('s', ctx, p)}
   ) sv`;
-  const found = await one<RemoteChapterRow>(
+  const found = parsed ? await one<RemoteChapterRow>(
     `SELECT sc.series_id, sv.title AS series_title, sc.source_id, sv.source_series_id,
             sc.source_chapter_id, sc.number, sc.title, sc.pages, sc.published_at,
             sc.status, sc.error, sv.web AS source_url
        FROM source_chapters sc JOIN ${visibleSeries} ON sv.id = sc.series_id
       WHERE sc.series_id = ${p.add(parsed.seriesId)} AND sc.source_chapter_id = ${p.add(parsed.sourceChapterId)}`,
     p.values as any[],
-  );
+  ) : null;
   if (found) return found;
 
-  const preview = parsePreviewBookId(id);
-  if (!preview) return null;
-  const source = getSource(preview.sourceId);
-  if (!source || !sourceAllowedFor(source, ctx.maxAgeRating)) return null;
-  const [series, chapters] = await Promise.all([
-    source.getSeries(preview.sourceSeriesId),
-    source.listChapters(preview.sourceSeriesId),
-  ]);
-  const chapter = chapters.find((c) => String(c.sourceId) === preview.sourceChapterId);
-  if (!series || !chapter) return null;
-  return {
-    series_id: id,
-    series_title: series.title,
-    source_id: preview.sourceId,
-    source_series_id: preview.sourceSeriesId,
-    source_chapter_id: preview.sourceChapterId,
-    number: chapter.number,
-    title: chapter.title || `Chapter ${chapter.number}`,
-    pages: chapter.pages ?? null,
-    published_at: chapter.publishedAt || null,
-    status: 'preview',
-    error: null,
-    source_url: series.url || source.base || null,
-  };
+  return null;
 }
 
 export function remoteSource(row: RemoteChapterRow): SourceAdapter | null {

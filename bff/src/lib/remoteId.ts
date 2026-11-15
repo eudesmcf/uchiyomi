@@ -16,18 +16,43 @@ export function parseRemoteBookId(id: string): { seriesId: string; sourceChapter
   }
 }
 
-/** Opaque, non-persistent chapter ids used by the "read without adding" preview. */
-export function previewBookId(sourceId: string, sourceSeriesId: string, sourceChapterId: string): string {
-  const payload = JSON.stringify({ sourceId, sourceSeriesId, sourceChapterId });
-  return `preview_${Buffer.from(payload).toString('base64url')}`;
+export interface PreviewBookPayload {
+  sourceId: string;
+  sourceSeriesId: string;
+  sourceChapterId: string;
+  seriesTitle?: string;
+  sourceUrl?: string | null;
+  number?: number;
+  title?: string | null;
+  pages?: number | null;
+  expiresAt?: number;
+  signed?: boolean;
 }
 
-export function parsePreviewBookId(id: string): { sourceId: string; sourceSeriesId: string; sourceChapterId: string } | null {
-  if (!id.startsWith('preview_')) return null;
+export function isPreviewBookId(id: string): boolean {
+  return id.startsWith('preview_') || id.startsWith('remote_src_');
+}
+
+export function parsePreviewBookId(id: string): PreviewBookPayload | null {
+  if (!isPreviewBookId(id)) return null;
   try {
-    const raw = Buffer.from(id.slice('preview_'.length), 'base64url').toString('utf8');
-    const value = JSON.parse(raw) as Partial<{ sourceId: string; sourceSeriesId: string; sourceChapterId: string }>;
+    const prefix = id.startsWith('remote_src_') ? 'remote_src_' : 'preview_';
+    const encoded = id.slice(prefix.length);
+    const raw = Buffer.from(encoded, 'base64url').toString('utf8');
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PreviewBookPayload>;
     if (!value.sourceId || !value.sourceSeriesId || !value.sourceChapterId) return null;
-    return { sourceId: value.sourceId, sourceSeriesId: value.sourceSeriesId, sourceChapterId: value.sourceChapterId };
+    return {
+      sourceId: value.sourceId,
+      sourceSeriesId: value.sourceSeriesId,
+      sourceChapterId: value.sourceChapterId,
+      seriesTitle: typeof value.seriesTitle === 'string' ? value.seriesTitle : undefined,
+      sourceUrl: typeof value.sourceUrl === 'string' ? value.sourceUrl : null,
+      number: typeof value.number === 'number' ? value.number : undefined,
+      title: typeof value.title === 'string' ? value.title : null,
+      pages: typeof value.pages === 'number' ? value.pages : null,
+      expiresAt: typeof value.expiresAt === 'number' ? value.expiresAt : undefined,
+      signed: false,
+    };
   } catch { return null; }
 }

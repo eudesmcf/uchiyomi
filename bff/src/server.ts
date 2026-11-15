@@ -51,7 +51,11 @@ async function main() {
     trustProxy: true,
     // Next's static export adds a trailing slash to page/API URLs. Accept both forms so local
     // development and the single-container deployment do not turn /auth/login/ into a 404.
-    routerOptions: { ignoreTrailingSlash: true },
+    // Remote preview ids are signed, self-contained handles. They are deliberately opaque and can be
+    // longer than the router's conservative default parameter limit, especially when source/series metadata
+    // is carried in the authenticated payload. Without an explicit limit the route is never matched and
+    // Fastify answers the generic 404 before the preview resolver can return a useful error.
+    routerOptions: { ignoreTrailingSlash: true, maxParamLength: 4096 },
     bodyLimit: 2 * 1024 * 1024,
   });
 

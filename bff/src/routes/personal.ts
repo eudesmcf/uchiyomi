@@ -4,7 +4,7 @@ import { q, one } from '../lib/db';
 // backend-agnostic content client: the owned library in owned mode, Komga otherwise. The old direct
 // `lib/komga` import silently nulled every series lookup here after the owned-library cutover.
 import { content as komga } from '../lib/backend';
-import { viewCtxFor, visible, browsable, browsableIds, Params, type ViewCtx, hideAdult } from '../lib/visibility';
+import { viewCtxFor, visible, browsable, browsableIds, Params, type ViewCtx, hideAdult, adultOnly } from '../lib/visibility';
 import { authenticate, userIdOf, roleOf, issueOpdsToken, issueApiToken, listApiTokens, revokeApiToken, API_SCOPES, revokeOpdsToken, opdsTokenStatus, setOpdsShowAdult, OPDS_TOKEN_DAYS } from '../lib/auth';
 import { env } from '../env';
 import { pushEnabled, vapidPublicKey, saveSubscription, removeSubscription } from '../lib/push';
@@ -34,7 +34,7 @@ function computeStreaks(days: string[]): { current: number; longest: number } {
 export default async function personalRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', async (req) => {
-    (req as any).viewCtx = await viewCtxFor(userIdOf(req), roleOf(req), { hideAdult: hideAdult(req) });
+    (req as any).viewCtx = await viewCtxFor(userIdOf(req), roleOf(req), { hideAdult: hideAdult(req), adultOnly: adultOnly(req) });
   });
   /** The viewer attached above. */
   const vc = (req: any): ViewCtx => req.viewCtx as ViewCtx;

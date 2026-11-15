@@ -10,7 +10,9 @@
 // v8: this worker leaked an IndexedDB connection, which blocked the page's v1 to v2 upgrade of the offline
 // store and hung the reader on "Loading chapter...". The old worker has to be replaced for that to stop, so
 // the bump is load-bearing here rather than cosmetic.
-const VERSION = 'v9';
+// v10: adult mode clears the in-memory query cache when switching contexts. Evict old runtime API/image
+// caches as well so a normal-mode rail cannot be replayed into the 18+ shell after an upgrade.
+const VERSION = 'v10';
 const SHELL = `yomi-shell-${VERSION}`;
 const STATIC = `yomi-static-${VERSION}`;
 const IMG = `yomi-img-${VERSION}`;

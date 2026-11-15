@@ -11,6 +11,7 @@ import { CinematicFX } from './CinematicFX';
 import { PageTransition } from './PageTransition';
 import { CommandPalette, usePaletteHotkeys } from './CommandPalette';
 import { Mark } from './Brand';
+import { useAdultMode } from './AdultToggle';
 
 function Splash() {
   return (
@@ -25,6 +26,7 @@ function Splash() {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { status, user } = useAuth();
   const path = usePathname();
+  const adult = useAdultMode();
   const [palette, setPalette] = useState(false);
   // Ctrl/Cmd+K or "/" anywhere in the app (reader keeps its own keys; palette skipped there)
   usePaletteHotkeys(setPalette, status === 'authed' && !path.startsWith('/reader'));
@@ -45,10 +47,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (status === 'anon') return <LoginScreen />;
 
   const immersive = path.startsWith('/reader');
-  if (immersive) return <>{children}</>;
+  if (immersive) return <div className={adult ? 'adult-mode min-h-screen bg-black' : 'min-h-screen bg-black'}>{children}</div>;
 
   return (
-    <>
+    <div className={adult ? 'adult-mode min-h-screen bg-ink-950' : 'min-h-screen bg-ink-950'}>
       <CinematicFX />
       <TopNav onSearchFocus={() => setPalette(true)} />
       {/* The mobile bottom nav is fixed and includes its own safe-area padding. Keep enough scroll
@@ -62,6 +64,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Renders nothing unless something is downloading or has failed. */}
       <DownloadsIndicator />
       <CommandPalette open={palette} onClose={() => setPalette(false)} />
-    </>
+    </div>
   );
 }

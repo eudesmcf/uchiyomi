@@ -13,10 +13,11 @@ import { suwayomiUrl, suwayomiImageHeaders } from '../lib/sources/suwayomi/clien
 import { join } from 'path';
 import { readFile } from 'fs/promises';
 import { q, one } from '../lib/db';
-import { viewCtxFor, visibleBookFile, seriesVisible, SYSTEM_CTX, type ViewCtx } from '../lib/visibility';
+import { viewCtxFor, visibleBookFile, seriesVisible, SYSTEM_CTX, type ViewCtx, adultOnly } from '../lib/visibility';
 import { artFile } from '../lib/seriesArt';
 import { HERO_FRAMES, heroFit, type HeroAr } from '../lib/heroFrame';
-import { fetchRemoteImage, remotePageUrls, remoteSource, resolveRemoteChapter } from '../lib/remoteChapter';
+import { isPreviewBookId, parseRemoteBookId } from '../lib/remoteId';
+import { fetchRemoteImage, remoteErrorCode, remoteErrorStatus, remotePageUrls, remoteSource, resolveRemoteChapter } from '../lib/remoteChapter';
 
 async function fetchUpstream(path: string): Promise<Buffer> {
   const res = await komgaImage(path);
@@ -259,13 +260,13 @@ export default async function imageRoutes(app: FastifyInstance) {
     if (token) {
       try {
         const claims = app.jwt.verify(token) as { sub?: string };
-        (req as any).viewCtx = await viewCtxFor(claims.sub ?? null);
+        (req as any).viewCtx = await viewCtxFor(claims.sub ?? null, undefined, { adultOnly: adultOnly(req), hideAdult: !adultOnly(req) });
         return;
       } catch { /* fall through to OPDS auth */ }
     }
     // OPDS readers load covers/pages with the same HTTP Basic token as the feed
     const who = await resolveOpdsBasic(req.headers.authorization);
-    if (who) { (req as any).viewCtx = await viewCtxFor(who.userId); return; }
+    if (who) { (req as any).viewCtx = await viewCtxFor(who.userId, undefined, { adultOnly: adultOnly(req), hideAdult: !adultOnly(req) }); return; }
     return reply.code(401).send({ error: 'unauthorized' });
   });
 
@@ -333,7 +334,9 @@ export default async function imageRoutes(app: FastifyInstance) {
     serveImage(req, reply, `lib-bthumb:${id}`, async () => {
       const abs = await bookFileAbs(id, vc(req));
       if (!abs) throw Object.assign(new Error('no book'), { statusCode: 404 });
-      const first = await cbzPageAt(abs, 0);
+      let first;
+      try { first = await cbzPageAt(abs, 0); }
+      catch { throw Object.assign(new Error('book_file_missing'), { statusCode: 404 }); }
       if (!first) throw Object.assign(new Error('empty'), { statusCode: 404 });
       q('UPDATE lib_books SET pages=$1 WHERE id=$2 AND pages<>$1', [first.total, id]).catch(() => {});
       const buffer = await sharp(first.bytes).resize({ width: 400, withoutEnlargement: true }).webp({ quality: 72 }).toBuffer();
@@ -384,8 +387,15 @@ export default async function imageRoutes(app: FastifyInstance) {
   app.get('/img/books/:id/thumb', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (id.startsWith('b_')) return serveLibBookThumb(req, reply, id);
-    if (id.startsWith('remote_')) {
-      if (!(await resolveRemoteChapter(vc(req), id))) return reply.code(404).send({ error: 'not_found' });
+    // Preview chapters use the same remote page pipeline as downloaded source chapters, but carry an
+    // opaque `preview_` id so opening Discover never creates a library row. Keep both forms here: the
+    // reader deliberately uses the normal /api/books and /img/books URLs for either kind.
+    if (isPreviewBookId(id) || parseRemoteBookId(id)) {
+      try {
+        if (!(await resolveRemoteChapter(vc(req), id))) return reply.code(404).send({ error: 'not_found' });
+      } catch (error) {
+        return reply.code(remoteErrorStatus(error)).send({ error: remoteErrorCode(error) });
+      }
       return serveImage(req, reply, `remote-book-placeholder:${id}`, async () => ({
         buffer: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600"><rect width="400" height="600" fill="#111018"/><path d="M120 260h160M120 300h160M120 340h110" stroke="#4a3b82" stroke-width="12" stroke-linecap="round"/><circle cx="200" cy="170" r="44" fill="#271d49" stroke="#7c5cff" stroke-width="6"/><text x="200" y="470" fill="#918ba8" font-family="sans-serif" font-size="22" text-anchor="middle">Capítulo remoto</text></svg>`),
         contentType: 'image/svg+xml',
@@ -406,8 +416,10 @@ export default async function imageRoutes(app: FastifyInstance) {
     if (!Number.isInteger(pageNo) || pageNo < 1) return reply.code(400).send({ error: 'bad_page' });
     const w = Number((req.query as Record<string, string>).w);
     if (id.startsWith('b_')) return serveLibBookPage(req, reply, id, pageNo, w);
-    if (id.startsWith('remote_')) {
-      const remote = await resolveRemoteChapter(vc(req), id);
+    if (isPreviewBookId(id) || parseRemoteBookId(id)) {
+      let remote;
+      try { remote = await resolveRemoteChapter(vc(req), id); }
+      catch (error) { return reply.code(remoteErrorStatus(error)).send({ error: remoteErrorCode(error) }); }
       if (!remote) return reply.code(404).send({ error: 'not_found' });
       let urls: string[];
       try { urls = await remotePageUrls(remote); }

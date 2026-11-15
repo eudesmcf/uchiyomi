@@ -152,6 +152,15 @@ test('a source that cannot rank its own titles is not asked to', () => {
   assert.deepEqual(budgetForMode(pool, 'popular', 9).map((s) => s.id), ['both'], 'popular takes only the one that can');
 });
 
+test('All keeps sources that expose either ranking', () => {
+  const pool = [
+    src({ id: 'latest-only', popular: false }),
+    src({ id: 'popular-only', latest: false, popular: true }),
+    src({ id: 'both', popular: true }),
+  ];
+  assert.deepEqual(budgetForMode(pool, 'all', 9).map((s) => s.id), ['latest-only', 'popular-only', 'both']);
+});
+
 test('THE NAMESPACING: switching listing must remount the children', () => {
   // The wall keys everything by `${listMode}:${sourceId}` so the toggle never has to CLEAR anything -- and
   // clearing is the only thing that has ever broken this page. But the two halves are a pair: if the key
