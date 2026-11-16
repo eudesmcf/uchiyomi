@@ -75,11 +75,11 @@ export function DiscoverHero({ slides, onPick }: { slides: Trending[]; onPick: (
       <div key={cur.title} className="absolute inset-0 animate-fade-up">
         {/* A 2:3 cover in a 16:6 box would be pillarboxed against flat black, so its own blur fills the sides. */}
         {letterboxed && (
-          <Img src={sourceCover(undefined, art, 800)} alt="" fallbackSrc={art || undefined}
+          <Img src={art || ''} alt="" fallbackSrc={sourceCover(undefined, art, 800) || undefined}
             className="absolute inset-0 h-full w-full scale-125 opacity-50 blur-2xl" />
         )}
         <Img
-          src={sourceCover(undefined, art, 1600)} alt={cur.title} fallbackSrc={art || undefined} eager
+          src={art || ''} alt={cur.title} fallbackSrc={sourceCover(undefined, art, 1600) || undefined} eager
           className={`absolute inset-0 h-full w-full ${letterboxed ? 'mx-auto max-w-2xl' : ''}`}
           imgClassName={wide && cur.banner ? 'object-center' : 'object-top'}
         />
@@ -146,7 +146,7 @@ export function TrendingCard({ t, onPick }: { t: Trending; onPick: (t: Trending)
   return (
     <button onClick={() => onPick(t)} className="group w-36 shrink-0 snap-start text-start lg:w-40">
       <div className="grad-border relative aspect-[2/3] overflow-hidden rounded-2xl border border-ink-700/60 transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-glow">
-        <Img src={sourceCover(undefined, t.cover)} alt={t.title} fallbackSrc={t.cover || undefined}
+        <Img src={t.cover || ''} alt={t.title} fallbackSrc={sourceCover(undefined, t.cover) || undefined}
           className="h-full w-full" imgClassName="transition-transform duration-500 group-hover:scale-[1.06]" />
         {t.score != null && (
           <span className="absolute end-1.5 top-1.5 rounded-md bg-ink-950/80 px-1.5 py-0.5 text-[10px] font-semibold text-accent backdrop-blur">{t.score}%</span>

@@ -265,8 +265,8 @@ export function SourceCard({ item, sourceName, onAdd, onOpen, onAuthor, eager }:
     >
       <div className={`grad-border relative aspect-[2/3] overflow-hidden rounded-2xl border border-ink-700/60 transition-all duration-300
                        ${owned ? 'opacity-55' : 'group-hover:-translate-y-1 group-hover:shadow-glow group-active:scale-[0.97]'}`}>
-        <Img src={sourceCover(item.source, item.coverUrl)} alt={item.title} eager={eager}
-          fallbackSrc={item.coverUrl || undefined}
+        <Img src={item.coverUrl || ''} alt={item.title} eager={eager}
+          fallbackSrc={sourceCover(item.source, item.coverUrl) || undefined}
           className="h-full w-full" imgClassName="transition-transform duration-500 group-hover:scale-[1.07]" />
 
         {sourceName && (
