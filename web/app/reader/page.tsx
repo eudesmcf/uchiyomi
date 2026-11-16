@@ -572,6 +572,11 @@ function ReaderInner() {
 
   const total = flat.length;
   const pageInChapter = activeChapter ? (flat[current]?.number ?? 0) : 0;
+  const chapterPageCount = activeChapter?.pages.length ?? 0;
+  const chapterProgress = chapterPageCount > 0
+    ? Math.min(1, Math.max(0, (pageInChapter - 1) / Math.max(1, chapterPageCount - 1)))
+    : 0;
+  const chapterProgressPercent = Math.round(chapterProgress * 100);
 
   // ---- bookmarks ----
   // A bookmark is a note about a page, not a pointer to bytes, so it is keyed on (book, page) and survives
@@ -601,8 +606,6 @@ function ReaderInner() {
       setMarks((prev) => { const n = new Set(prev); on ? n.add(k) : n.delete(k); return n; });
     }
   };
-  const chapterPageCount = activeChapter?.pages.length ?? 0;
-
   // the header's two-line "what you are reading" block, wrapped in a link to the series when we know its id
   const titleBlock = (
     <>
@@ -789,6 +792,12 @@ function ReaderInner() {
               <button onClick={() => setShowSettings(true)} className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-black/45 text-white backdrop-blur">
                 <IcSliders width={20} height={20} />
               </button>
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-white/10" role="progressbar"
+                aria-label={tr('Chapter progress')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={chapterProgressPercent}
+                title={`${chapterProgressPercent}% · ${tr('Chapter progress')}`}>
+                <motion.div className="h-full bg-accent shadow-[0_0_12px_rgb(var(--accent)/0.8)]"
+                  initial={false} animate={{ width: `${chapterProgressPercent}%` }} transition={{ duration: 0.2, ease: 'easeOut' }} />
+              </div>
             </motion.header>
 
             <motion.footer initial={{ y: 64, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 64, opacity: 0 }}
