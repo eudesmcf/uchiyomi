@@ -128,6 +128,29 @@ const firstPageInput = async (id: string, ctx: ViewCtx): Promise<Buffer> => {
   return first.bytes;
 };
 
+/** Resolve art even when an earlier lookup left an empty series_art row behind. */
+async function resolveSeriesArt(id: string): Promise<{ banner: string | null; cover: string | null }> {
+  let art = await one<{ banner: string | null; cover: string | null }>('SELECT banner, cover FROM series_art WHERE series_id = $1', [id]);
+  if (art?.banner || art?.cover) return art;
+  const title = (await one<{ title: string }>('SELECT title FROM lib_series WHERE id = $1', [id]))?.title || '';
+  if (!title) return art || { banner: null, cover: null };
+  try {
+    const fetched = await fetchAniListArt(title);
+    await q(
+      `INSERT INTO series_art (series_id, banner, cover) VALUES ($1, $2, $3)
+       ON CONFLICT (series_id) DO UPDATE SET
+         banner = COALESCE(EXCLUDED.banner, series_art.banner),
+         cover = COALESCE(EXCLUDED.cover, series_art.cover), fetched_at = now()`,
+      [id, fetched.banner, fetched.cover],
+    );
+    if (fetched.mediaId) await linkSeries(id, fetched.mediaId, fetched.mediaTitle ?? null);
+    art = { banner: fetched.banner, cover: fetched.cover };
+  } catch {
+    // Keep the first-page fallback available if the metadata provider is temporarily unavailable.
+  }
+  return art || { banner: null, cover: null };
+}
+
 // Hero frames match the two client viewports (lg desktop strip / phone portrait) so the browser barely crops.
 const ambientComposite = (input: Buffer) =>
   sharp(input).resize(1600, 1024, { fit: 'cover' }).blur(22).modulate({ brightness: 0.82, saturation: 1.18 }).webp({ quality: 80 }).toBuffer();
@@ -165,28 +188,7 @@ async function backdropRecipe(id: string, hero: boolean, ar: HeroAr, ctx: ViewCt
       },
     };
   }
-  let art = await one<{ banner: string | null; cover: string | null }>('SELECT banner, cover FROM series_art WHERE series_id = $1', [id]);
-  if (!art) {
-    try {
-      let title = '';
-      try {
-        const lib = await one<{ title: string }>('SELECT title FROM lib_series WHERE id = $1', [id]);
-        if (lib?.title) title = lib.title;
-        else { const s = await komga.series(id); title = s?.metadata?.title || s?.name || ''; }
-      } catch {}
-      const fetched = title ? await fetchAniListArt(title) : { banner: null, cover: null };
-      await q(
-        `INSERT INTO series_art (series_id, banner, cover) VALUES ($1, $2, $3)
-         ON CONFLICT (series_id) DO UPDATE SET banner = EXCLUDED.banner, cover = EXCLUDED.cover, fetched_at = now()`,
-        [id, fetched.banner, fetched.cover],
-      );
-      // the same match also anchors tracker sync — record it while we have it
-      if (fetched.mediaId) await linkSeries(id, fetched.mediaId, fetched.mediaTitle ?? null);
-      art = fetched;
-    } catch {
-      art = { banner: null, cover: null }; // transient AniList error: don't cache; fall back this view
-    }
-  }
+  const art = await resolveSeriesArt(id);
   const url = art.banner || art.cover;
   const sharpHero = hero && !!url; // banner OR cover: show the real art sharp; only the no-art first-page fallback stays ambient
   const variant = url ? `artw${sharpHero ? `7h${ar}` : '6'}:${id}:${art.banner ? 'b' : 'c'}` : `artw6:${id}:p`;
@@ -310,13 +312,13 @@ export default async function imageRoutes(app: FastifyInstance) {
         return { buffer, contentType: 'image/webp' };
       });
     }
-    const art = await one<{ cover: string | null; source_id: string | null }>(
-      'SELECT a.cover, s.source_id FROM series_art a LEFT JOIN lib_series s ON s.id = a.series_id WHERE a.series_id = $1', [id]);
+    const art = await resolveSeriesArt(id);
     if (art?.cover) {
       return serveImage(req, reply, `lib-sthumb:${id}:c${wk}`, async () => {
         // remote cover first; on ANY failure (hotlink CDN, dead link, timeout) fall back to the first page
         let input: Buffer;
-        try { input = await fetchCoverImage(art.cover!, art.source_id || undefined); }
+        const source = await one<{ source_id: string | null }>('SELECT source_id FROM lib_series WHERE id = $1', [id]);
+        try { input = await fetchCoverImage(art.cover!, source?.source_id || undefined); }
         catch { input = await firstPageInput(id, vc(req)); }
         storeColor(id, input);
         const buffer = await sharp(input).resize({ width: w, withoutEnlargement: true }).webp({ quality: 80 }).toBuffer();
