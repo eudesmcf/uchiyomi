@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { ART } from '@/lib/art';
@@ -19,7 +20,7 @@ import { IcChevronLeft, IcSearch, IcSparkle, IcX } from '@/components/icons';
 import { useAdultMode } from '@/components/AdultToggle';
 
 interface Job { folder: string; title: string; total: number; done: number; status: string; reason?: string }
-interface SearchGroup { title: string; coverUrl?: string; author?: string; inLibrary?: boolean; updatedAt?: string; providers: { source: string; name: string; sourceId: string; title: string; coverUrl?: string; author?: string; lang?: string }[] }
+interface SearchGroup { title: string; coverUrl?: string; author?: string; inLibrary?: boolean; seriesId?: string; updatedAt?: string; providers: { source: string; name: string; sourceId: string; title: string; coverUrl?: string; author?: string; lang?: string }[] }
 
 /**
  * How many titles the hero rotates through.
@@ -82,6 +83,7 @@ const isExcludedGenre = (value: string) => /^(?:yaoi|boys?[- ]love|shounen[- ]?a
 export default function DiscoverPage() {
   const toast = useToast();
   const qc = useQueryClient();
+  const router = useRouter();
   const { user, isAdmin } = useAuth();
   const adult = useAdultMode();
 
@@ -165,7 +167,7 @@ export default function DiscoverPage() {
   const [searchHits, setSearchHits] = useState<SourceItem[]>([]);
   const [searching, setSearching] = useState(false);
   const [seed, setSeed] = useState<AddSeed | null>(null);
-  const [added, setAdded] = useState<Set<string>>(new Set());
+  const [added, setAdded] = useState<Map<string, string>>(new Map());
   const [hiddenGenres, setHiddenGenres] = useState<string[]>(['yaoi']);
 
   useEffect(() => {
@@ -315,7 +317,7 @@ export default function DiscoverPage() {
       setSearchHits((r.content ?? []).map((g) => ({
         source: g.providers[0]?.source ?? '', sourceId: g.providers[0]?.sourceId ?? g.title,
         title: g.title, author: g.author, coverUrl: g.coverUrl, updatedAt: g.updatedAt, lang: sourceLang,
-        inLibrary: g.inLibrary, providerCount: g.providers.length,
+        inLibrary: g.inLibrary, seriesId: g.seriesId, providerCount: g.providers.length,
       })));
       (r.content ?? []).forEach((g) => { (groupsRef.current as any)[norm(g.title)] = g.providers; });
     } catch { toast(tr('Search failed'), 'error'); }
@@ -342,7 +344,11 @@ export default function DiscoverPage() {
   };
 
   const open = (it: SourceItem) => {
-    if (it.inLibrary || added.has(norm(it.title))) return;
+    if (it.inLibrary || added.has(norm(it.title))) {
+      const seriesId = it.seriesId || added.get(norm(it.title));
+      if (seriesId) router.push(`/series/?id=${encodeURIComponent(seriesId)}`);
+      return;
+    }
     const providers = groupsRef.current[norm(it.title)];
     if (providers?.length) setSeed({ kind: 'group', title: it.title, providers });
     else setSeed({ kind: 'result', provider: { source: it.source, name: nameOf(it.source) ?? it.source, sourceId: it.sourceId, title: it.title, coverUrl: it.coverUrl, lang: sourceLang } });
@@ -594,9 +600,9 @@ export default function DiscoverPage() {
       ) : (
         <div className="grid grid-cols-3 gap-x-3 gap-y-5 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 lg:gap-x-4 xl:grid-cols-8 2xl:grid-cols-9 min-[1800px]:grid-cols-10">
           {visibleWall.map((it, i) => (
-            <SourceCard key={`${it.source}:${it.sourceId}`} item={{ ...it, inLibrary: it.inLibrary || added.has(norm(it.title)) }} onAuthor={searchAuthor}
-              sourceName={mode === 'newest' && order.length > 1 ? nameOf(it.source) : undefined}
-              onAdd={() => open(it)} eager={i < 12} />
+              <SourceCard key={`${it.source}:${it.sourceId}`} item={{ ...it, inLibrary: it.inLibrary || added.has(norm(it.title)), seriesId: it.seriesId || added.get(norm(it.title)) }} onAuthor={searchAuthor}
+                sourceName={mode === 'newest' && order.length > 1 ? nameOf(it.source) : undefined}
+              onAdd={() => open(it)} onOpen={() => open(it)} eager={i < 12} />
           ))}
           {Array.from({ length: Math.min(18, pending * 6) }).map((_, i) => (
             <div key={`sk${i}`} className="skeleton aspect-[2/3] rounded-2xl" />
@@ -647,7 +653,11 @@ export default function DiscoverPage() {
           sources={budgetIds}
           onClose={() => setSeed(null)}
           onAdded={(r) => {
-            setAdded((prev) => new Set(prev).add(norm(r.title)));
+            setAdded((prev) => {
+              const next = new Map(prev);
+              if (r.seriesId) next.set(norm(r.title), r.seriesId);
+              return next;
+            });
             qc.invalidateQueries({ queryKey: ['source-jobs'] });
           }}
         />

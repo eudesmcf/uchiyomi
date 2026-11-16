@@ -7,7 +7,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { api } from '@/lib/api';
 import { Page, Series } from '@/lib/types';
 import { SeriesTile } from '@/components/cards';
-import { IcSearch, IcSparkle, IcPlus } from '@/components/icons';
+import { IcSearch, IcSparkle, IcPlus, IcCopy } from '@/components/icons';
 import { PullToRefresh } from '@/components/PullToRefresh';
 import { triggerRefresh } from '@/lib/refresh';
 import { useToast } from '@/components/Toast';
@@ -137,6 +137,7 @@ function LibraryInner() {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [acting, setActing] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [deletingSeries, setDeletingSeries] = useState<Series | null>(null);
   const { isAdmin, user } = useAuth();
   useEffect(() => { setSelecting(false); setPicked(new Set()); }, [read, status, genres.join(','), sortKey, lib]);
   const togglePick = (id: string) =>
@@ -192,6 +193,24 @@ function LibraryInner() {
       setSelecting(false); setPicked(new Set());
       qc.invalidateQueries({ queryKey: ['library'] }); qc.invalidateQueries({ queryKey: ['home'] });
     } catch { toast('Não foi possível mover todas as séries para a lixeira', 'error'); }
+    setActing(false);
+  };
+  const copyName = async (series: Series) => {
+    const title = series.metadata?.title || series.name;
+    try { await navigator.clipboard.writeText(title); toast('Nome copiado', 'success'); }
+    catch { toast('Não foi possível copiar o nome', 'error'); }
+  };
+  const deleteOne = async () => {
+    if (!deletingSeries) return;
+    const series = deletingSeries;
+    setActing(true);
+    try {
+      await api(`/api/admin/series/${encodeURIComponent(series.id)}`, { method: 'DELETE' });
+      toast('Obra movida para a lixeira', 'success');
+      setDeletingSeries(null);
+      qc.invalidateQueries({ queryKey: ['library'] });
+      qc.invalidateQueries({ queryKey: ['home'] });
+    } catch { toast('Não foi possível excluir a obra', 'error'); }
     setActing(false);
   };
 
@@ -302,7 +321,10 @@ function LibraryInner() {
           : items.map((s, i) => (
               <SeriesTile key={s.id} series={s} eager={i < 12}
                 selectable={selecting} selected={picked.has(s.id)} onToggle={() => togglePick(s.id)}
-                onLongPress={isAdmin ? () => { setSelecting(true); togglePick(s.id); } : undefined} />
+                canDelete={isAdmin}
+                onCopyName={() => void copyName(s)}
+                onRead={() => router.push(`/series/?id=${encodeURIComponent(s.id)}`)}
+                onDelete={isAdmin ? () => setDeletingSeries(s) : undefined} />
             ))}
       </div>
 
@@ -336,6 +358,24 @@ function LibraryInner() {
             await bulk('/api/admin/series/library', { libraryId });
           }}
         />
+      )}
+      {deletingSeries && (
+        <Modal title="Excluir obra" onClose={() => !acting && setDeletingSeries(null)}>
+          <div className="space-y-4">
+            <p className="text-sm text-fog-300">A obra será movida para a lixeira. Os arquivos não serão apagados.</p>
+            <p className="rounded-lg border border-ink-700 bg-ink-900/60 px-3 py-2 text-sm font-medium text-fog-100">
+              {deletingSeries.metadata?.title || deletingSeries.name}
+            </p>
+            <div className="flex gap-2">
+              <button type="button" disabled={acting} onClick={() => void copyName(deletingSeries)} className="chip flex-1 justify-center text-xs disabled:opacity-50">
+                <IcCopy width={14} height={14} /> Copiar nome
+              </button>
+              <button type="button" disabled={acting} onClick={() => void deleteOne()} className="flex-1 rounded-full border border-rose-400/40 px-3 py-2 text-xs text-rose-200 hover:bg-rose-950/40 disabled:opacity-50">
+                {acting ? 'Excluindo…' : 'Excluir'}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
       {sheet && (
         <FilterSheet

@@ -73,6 +73,9 @@ export const IcSliders = (p: P) => (
 export const IcTrash = (p: P) => (
   <svg {...base(p)}><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></svg>
 );
+export const IcCopy = (p: P) => (
+  <svg {...base(p)}><rect x="8" y="8" width="11" height="11" rx="1.5" /><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" /></svg>
+);
 export const IcBookmark = (p: P) => (
   <svg {...base(p)}><path d="M6 3h12v18l-6-4-6 4V3Z" /></svg>
 );

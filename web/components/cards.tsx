@@ -6,7 +6,7 @@ import { Book, Series } from '@/lib/types';
 import { chapterLabel, progressOf, relativeTime } from '@/lib/format';
 import { deviceId } from '@/lib/device';
 import { Img, ProgressBar } from './ui';
-import { IcHeart, IcPlay, IcPlus } from './icons';
+import { IcCopy, IcHeart, IcPlay, IcPlus, IcTrash } from './icons';
 import { t as tr } from '@/lib/i18n';
 
 /** Pointer-tracked 3D tilt + moving glare for cover cards. Desktop-only (hover+fine pointer),
@@ -113,31 +113,63 @@ export function ContinueCard({ book, eager = false }: { book: Book; eager?: bool
 }
 
 /** Grid tile (library / search). */
-export function SeriesTile({ series, eager = false, selectable, selected, onToggle, onLongPress }: {
+export function SeriesTile({ series, eager = false, selectable, selected, onToggle, canDelete, onCopyName, onRead, onDelete }: {
   series: Series; eager?: boolean;
   /** select mode: the tile stops navigating and toggles instead */
   selectable?: boolean; selected?: boolean; onToggle?: () => void;
-  /** Enters bulk selection on touch-and-hold or desktop context menu. */
-  onLongPress?: () => void;
+  canDelete?: boolean; onCopyName?: () => void; onRead?: () => void; onDelete?: () => void;
 }) {
   const unread = series.booksUnreadCount ?? 0;
   const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
   const held = useRef(false);
+  const [menu, setMenu] = useState(false);
+  const title = series.metadata?.title || series.name;
   const clearHold = () => { if (hold.current) { clearTimeout(hold.current); hold.current = null; } };
   const startHold = () => {
-    if (selectable || !onLongPress) return;
+    if (selectable) return;
     held.current = false;
     clearHold();
-    hold.current = setTimeout(() => { held.current = true; onLongPress(); }, 550);
+    hold.current = setTimeout(() => { held.current = true; setMenu(true); }, 550);
   };
   const finishHold = (e?: React.SyntheticEvent) => { clearHold(); if (held.current) { e?.preventDefault(); e?.stopPropagation(); held.current = false; } };
-  const Wrap: any = selectable ? 'button' : Link;
-  const wrapProps = selectable
-    ? { type: 'button', onClick: onToggle, className: 'group w-full text-left' }
-    : { href: `/series/?id=${series.id}`, className: 'group' };
-  return (
-    <Wrap {...wrapProps} onPointerDown={startHold} onPointerUp={finishHold} onPointerCancel={clearHold}
-      onContextMenu={(e: React.MouseEvent) => { if (!selectable && onLongPress) { e.preventDefault(); onLongPress(); } }}>
+  const openMenu = (e: React.MouseEvent) => { if (selectable) return; e.preventDefault(); setMenu(true); };
+  const actions = (
+    <div className="relative mt-1.5 flex min-w-0 items-start gap-1">
+      {selectable ? (
+        <span className="min-w-0 flex-1 line-clamp-2 text-xs font-medium leading-tight text-fog-300">{title}</span>
+      ) : (
+        <Link href={`/series/?id=${series.id}`} className="min-w-0 flex-1 line-clamp-2 text-xs font-medium leading-tight text-fog-300 transition hover:text-fog-100">
+          {title}
+        </Link>
+      )}
+      {!selectable && onCopyName && (
+        <button type="button" aria-label="Copiar nome" title="Copiar nome" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onCopyName(); }}
+          className="shrink-0 rounded-md p-1 text-fog-500 hover:bg-ink-800 hover:text-fog-100">
+          <IcCopy width={14} height={14} />
+        </button>
+      )}
+      {menu && !selectable && (
+        <>
+          <button type="button" aria-label="Fechar menu" className="fixed inset-0 z-40 cursor-default" onClick={() => setMenu(false)} />
+          <div role="menu" className="absolute end-0 top-full z-50 mt-1 w-44 rounded-xl border border-ink-700 bg-ink-900 p-1.5 shadow-2xl">
+            <button type="button" role="menuitem" onClick={() => { setMenu(false); (onRead || (() => window.location.assign(`/series/?id=${series.id}`)))(); }}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-fog-200 hover:bg-ink-800">
+              <IcPlay width={14} height={14} /> Ler obra
+            </button>
+            {onCopyName && <button type="button" role="menuitem" onClick={() => { setMenu(false); onCopyName(); }}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-fog-200 hover:bg-ink-800">
+              <IcCopy width={14} height={14} /> Copiar nome
+            </button>}
+            {canDelete && onDelete && <button type="button" role="menuitem" onClick={() => { setMenu(false); onDelete(); }}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-rose-200 hover:bg-rose-950/40">
+              <IcTrash width={14} height={14} /> Excluir obra
+            </button>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+  const art = (
       <div className="grad-border relative aspect-[2/3] overflow-hidden rounded-2xl border border-ink-700/60 transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-glow group-active:scale-[0.97]">
         <Img src={img.seriesThumb(series.id)} alt={series.metadata?.title || series.name} eager={eager} className="h-full w-full transition-transform duration-500 group-hover:scale-[1.07]" />
         {selectable && (
@@ -161,10 +193,20 @@ export function SeriesTile({ series, eager = false, selectable, selected, onTogg
           <span className="absolute bottom-1.5 left-1.5 z-10 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold text-black">NEW</span>
         )}
       </div>
-      <p className="mt-1.5 line-clamp-2 text-xs font-medium leading-tight text-fog-300 transition group-hover:text-fog-100">
-        {series.metadata?.title || series.name}
-      </p>
-    </Wrap>
+  );
+  if (selectable) return (
+    <button type="button" onClick={onToggle} className="group w-full text-left">
+      {art}
+      {actions}
+    </button>
+  );
+  return (
+    <div className="group relative" onPointerDown={startHold} onPointerUp={finishHold} onPointerCancel={clearHold} onContextMenu={openMenu}>
+      <Link href={`/series/?id=${series.id}`} onClick={(e) => { if (held.current) { e.preventDefault(); e.stopPropagation(); held.current = false; } }}>
+        {art}
+      </Link>
+      {actions}
+    </div>
   );
 }
 
@@ -187,6 +229,7 @@ export interface SourceItem {
   coverUrl?: string;
   updatedAt?: string;
   inLibrary?: boolean;
+  seriesId?: string;
   /** >1 when the same title was found on several sources. */
   providerCount?: number;
   genres?: string[];
@@ -203,11 +246,12 @@ export interface SourceItem {
  * Chrome is `SeriesTile`'s, deliberately, so the things you own and the things you could own read as one
  * system rather than as two grids that happen to be adjacent.
  */
-export function SourceCard({ item, sourceName, onAdd, onAuthor, eager }: {
+export function SourceCard({ item, sourceName, onAdd, onOpen, onAuthor, eager }: {
   item: SourceItem;
   /** shown as a corner chip, because a wall merged from several sources otherwise hides where a title came from */
   sourceName?: string;
   onAdd: () => void;
+  onOpen: () => void;
   onAuthor?: (author: string) => void;
   eager?: boolean;
 }) {
@@ -215,10 +259,9 @@ export function SourceCard({ item, sourceName, onAdd, onAuthor, eager }: {
   return (
     <button
       type="button"
-      onClick={onAdd}
-      disabled={owned}
-      aria-label={owned ? item.title : tr('Add to library')}
-      className="group block w-full text-start disabled:cursor-default"
+      onClick={owned ? onOpen : onAdd}
+      aria-label={owned ? tr('Open in library') : tr('Add to library')}
+      className="group block w-full cursor-pointer text-start"
     >
       <div className={`grad-border relative aspect-[2/3] overflow-hidden rounded-2xl border border-ink-700/60 transition-all duration-300
                        ${owned ? 'opacity-55' : 'group-hover:-translate-y-1 group-hover:shadow-glow group-active:scale-[0.97]'}`}>

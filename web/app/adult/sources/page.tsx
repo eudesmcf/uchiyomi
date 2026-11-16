@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { SourceCard, SourceItem } from '@/components/cards';
@@ -13,6 +14,7 @@ import { t as tr } from '@/lib/i18n';
 
 export default function AdultSourcesPage() {
   const { data: sourcesData, isLoading: loadingSources } = useQuery({ queryKey: ['adult-sources'], queryFn: () => api<{ content: Src[] }>('/api/sources?adultSources=1'), staleTime: 30_000 });
+  const router = useRouter();
   const sources = useMemo(() => sourcesData?.content ?? [], [sourcesData]);
   const [sourceId, setSourceId] = useState('');
   const [sourceLang, setSourceLang] = useState('pt-br');
@@ -41,7 +43,7 @@ export default function AdultSourcesPage() {
       </div>
     </header>
     <div className="mb-3 mt-6 flex items-baseline justify-between gap-3"><h2 className="font-display text-lg font-semibold tracking-tight text-fog-50">{submitted ? `${tr('Results')} · ${submitted}` : `${tr('Latest')} · ${selected?.name || ''}`}</h2>{(loadingLatest || searching) && <span className="text-xs text-fog-500">{tr('Loading…')}</span>}</div>
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">{items.map((item, i) => <SourceCard key={`${item.source}:${item.sourceId}`} item={item} sourceName={selected?.name} eager={i < 12} onAdd={() => setSeed({ kind: 'result', provider: { source: item.source, name: selected?.name || item.source, sourceId: item.sourceId, title: item.title, coverUrl: item.coverUrl, lang: selected?.lang || undefined } })} />)}</div>
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">{items.map((item, i) => <SourceCard key={`${item.source}:${item.sourceId}`} item={item} sourceName={selected?.name} eager={i < 12} onOpen={() => item.seriesId && router.push(`/series/?id=${encodeURIComponent(item.seriesId)}`)} onAdd={() => setSeed({ kind: 'result', provider: { source: item.source, name: selected?.name || item.source, sourceId: item.sourceId, title: item.title, coverUrl: item.coverUrl, lang: selected?.lang || undefined } })} />)}</div>
     {!loadingLatest && !searching && !items.length && <div className="card mt-4 p-8 text-center text-sm text-fog-400">{tr('No results from this adult source.')}</div>}
     {seed && <AddSeriesDialog seed={seed} sources={selected ? [selected.id] : []} onClose={() => setSeed(null)} onAdded={() => {}} />}
   </div>;

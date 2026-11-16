@@ -145,14 +145,14 @@ function pickBest<T extends { title: string }>(list: T[], term: string): T | nul
  * `addSeriesFromSource`, which has always compared this way.
  */
 const NORM_SQL = "lower(regexp_replace(s.title, '[^a-zA-Z0-9]', '', 'g'))";
-async function inLibrary(titles: Array<string | undefined>): Promise<Set<string>> {
+async function inLibrary(titles: Array<string | undefined>): Promise<Map<string, string>> {
   const keys = [...new Set(titles.map((t) => norm(t || '')).filter(Boolean))];
-  if (!keys.length) return new Set();
-  const rows = await q<{ k: string }>(
-    `SELECT ${NORM_SQL} AS k FROM lib_series s WHERE ${visibleToAll('s')} AND ${NORM_SQL} = ANY($1)`,
+  if (!keys.length) return new Map();
+  const rows = await q<{ k: string; id: string }>(
+    `SELECT ${NORM_SQL} AS k, s.id FROM lib_series s WHERE ${visibleToAll('s')} AND ${NORM_SQL} = ANY($1)`,
     [keys],
   ).catch(() => []);
-  return new Set(rows.map((r) => r.k));
+  return new Map(rows.map((r) => [r.k, r.id]));
 }
 
 /**
@@ -733,7 +733,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
     const results = raw.filter((r) => !!r.sourceId && !seen.has(r.sourceId) && (seen.add(r.sourceId), true)).slice(0, 24);
     // flag titles already in the library so the UI can mark them instead of offering a duplicate add
     const have = await inLibrary(results.map((r) => r.title));
-    return { content: results.map((r) => ({ ...r, inLibrary: have.has(norm(r.title)) })) };
+    return { content: results.map((r) => ({ ...r, inLibrary: !!have.get(norm(r.title)), seriesId: have.get(norm(r.title)) })) };
   });
 
   // Search a title across ALL enabled providers at once, grouped so one card carries every source that
@@ -999,7 +999,7 @@ export default async function sourceRoutes(app: FastifyInstance) {
     }
     const have = await inLibrary([...groups.values()].map((g) => g.title));
     const out = [...groups.values()]
-      .map((g) => ({ ...g, inLibrary: have.has(norm(g.title)) }))
+      .map((g) => ({ ...g, inLibrary: !!have.get(norm(g.title)), seriesId: have.get(norm(g.title)) }))
       .sort((a, b) => b.providers.length - a.providers.length)
       .slice(0, 30);
     return { content: out };
@@ -1033,11 +1033,11 @@ export default async function sourceRoutes(app: FastifyInstance) {
     if (await blockedNow(source!).catch(() => null)) {
       const stale = cachedLatest(src.id, p, 'latest', lang);
       const had = await inLibrary(stale.map((r) => r.title));
-      return { content: stale.map((r) => ({ ...r, inLibrary: had.has(norm(r.title)) })) };
+      return { content: stale.map((r) => ({ ...r, inLibrary: !!had.get(norm(r.title)), seriesId: had.get(norm(r.title)) })) };
     }
     const results = await latestPage(src, p, 'latest', lang);
     const have = await inLibrary(results.map((r) => r.title));
-    return { content: results.map((r) => ({ ...r, inLibrary: have.has(norm(r.title)) })) };
+    return { content: results.map((r) => ({ ...r, inLibrary: !!have.get(norm(r.title)), seriesId: have.get(norm(r.title)) })) };
   });
 
   /**
@@ -1059,11 +1059,11 @@ export default async function sourceRoutes(app: FastifyInstance) {
     if (await blockedNow(source!).catch(() => null)) {
       const stale = cachedLatest(src.id, p, 'popular', lang);
       const had = await inLibrary(stale.map((r) => r.title));
-      return { content: stale.map((r) => ({ ...r, inLibrary: had.has(norm(r.title)) })) };
+      return { content: stale.map((r) => ({ ...r, inLibrary: !!had.get(norm(r.title)), seriesId: had.get(norm(r.title)) })) };
     }
     const results = await latestPage(src, p, 'popular', lang);
     const have = await inLibrary(results.map((r) => r.title));
-    return { content: results.map((r) => ({ ...r, inLibrary: have.has(norm(r.title)) })) };
+    return { content: results.map((r) => ({ ...r, inLibrary: !!have.get(norm(r.title)), seriesId: have.get(norm(r.title)) })) };
   });
 
   // Browse the union of the source's newest and popular listings. This keeps "All" useful for adapters that
@@ -1081,11 +1081,11 @@ export default async function sourceRoutes(app: FastifyInstance) {
       const seen = new Set<string>();
       const unique = stale.filter((r) => !seen.has(r.sourceId) && (seen.add(r.sourceId), true)).slice(0, 24);
       const have = await inLibrary(unique.map((r) => r.title));
-      return { content: unique.map((r) => ({ ...r, inLibrary: have.has(norm(r.title)) })) };
+      return { content: unique.map((r) => ({ ...r, inLibrary: !!have.get(norm(r.title)), seriesId: have.get(norm(r.title)) })) };
     }
     const results = await allPage(src, p, lang);
     const have = await inLibrary(results.map((r) => r.title));
-    return { content: results.map((r) => ({ ...r, inLibrary: have.has(norm(r.title)) })) };
+    return { content: results.map((r) => ({ ...r, inLibrary: !!have.get(norm(r.title)), seriesId: have.get(norm(r.title)) })) };
   });
 
   app.get('/api/sources/jobs', async (req) => {
