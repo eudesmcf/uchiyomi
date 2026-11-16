@@ -132,8 +132,10 @@ const firstPageInput = async (id: string, ctx: ViewCtx): Promise<Buffer> => {
 async function resolveSeriesArt(id: string): Promise<{ banner: string | null; cover: string | null }> {
   let art = await one<{ banner: string | null; cover: string | null }>('SELECT banner, cover FROM series_art WHERE series_id = $1', [id]);
   if (art?.banner || art?.cover) return art;
-  const title = (await one<{ title: string }>('SELECT title FROM lib_series WHERE id = $1', [id]))?.title || '';
-  if (!title) return art || { banner: null, cover: null };
+  const sourceRow = await one<{ title: string; source_id: string | null; source_series_id: string | null }>(
+    'SELECT title, source_id, source_series_id FROM lib_series WHERE id = $1', [id]);
+  const title = sourceRow?.title || '';
+  if (!title && !sourceRow?.source_id) return art || { banner: null, cover: null };
   try {
     const fetched = await fetchAniListArt(title);
     await q(
@@ -147,6 +149,24 @@ async function resolveSeriesArt(id: string): Promise<{ banner: string | null; co
     art = { banner: fetched.banner, cover: fetched.cover };
   } catch {
     // Keep the first-page fallback available if the metadata provider is temporarily unavailable.
+  }
+  // Source-backed series can have a perfectly good cover even when AniList has no match. This is
+  // especially common for newly added remote-only chapters, which have no downloaded first page yet.
+  if (!art?.cover && sourceRow?.source_id && sourceRow.source_series_id) {
+    try {
+      const source = getSource(sourceRow.source_id);
+      const remote = source ? await source.getSeries(sourceRow.source_series_id) : null;
+      if (remote?.coverUrl) {
+        await q(
+          `INSERT INTO series_art (series_id, banner, cover) VALUES ($1, NULL, $2)
+           ON CONFLICT (series_id) DO UPDATE SET cover = COALESCE(series_art.cover, EXCLUDED.cover), fetched_at = now()`,
+          [id, remote.coverUrl],
+        );
+        art = { banner: art?.banner || null, cover: remote.coverUrl };
+      }
+    } catch {
+      // The source may be temporarily unavailable; leave the first-page fallback as the last resort.
+    }
   }
   return art || { banner: null, cover: null };
 }
